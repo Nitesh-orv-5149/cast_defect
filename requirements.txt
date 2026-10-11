@@ -1,0 +1,6 @@
+# training/export only; the web app needs nothing installed
+torch
+torchvision
+onnx
+onnxruntime
+pillow

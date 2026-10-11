@@ -1,0 +1,4 @@
+data/
+.remember/
+__pycache__/
+.vercel
