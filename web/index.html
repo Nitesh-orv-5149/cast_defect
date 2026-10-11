@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cast Inspector</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <style>
   :root { --bg:#111; --fg:#eee; --muted:#888; --pass:#1b8a3a; --reject:#c62828; --card:#1d1d1d; }
   * { box-sizing:border-box; }
@@ -143,6 +148,7 @@ $("export").onclick = () => {
   a.download = "inspection_log.csv"; a.click();
 };
 
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
 init().catch(e => { verdict.textContent = "Failed to load model: " + e.message + " (run train.py first)"; });
 </script>
 </body>
