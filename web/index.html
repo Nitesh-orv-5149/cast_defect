@@ -50,7 +50,7 @@
   <ul id="history"></ul>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js" crossorigin="anonymous"></script>
 <script>
 const THRESHOLD = 0.5;  // defect probability above this = REJECT. Tune on the shop floor.
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
