@@ -97,10 +97,9 @@ const jet = v => [1.5 - Math.abs(4 * v - 3), 1.5 - Math.abs(4 * v - 2), 1.5 - Ma
   .map(c => Math.round(255 * Math.min(1, Math.max(0, c))));
 
 async function init() {
-  [meta, session] = await Promise.all([
-    fetch("meta.json").then(r => r.json()),
-    ort.InferenceSession.create("model.onnx", { executionProviders: ["wasm"] }),
-  ]);
+  // One retry: on first visit the page and the offline cache download model.onnx at the same time, which can fail once
+  const load = () => Promise.all([fetch("meta.json").then(r => r.json()), ort.InferenceSession.create("model.onnx", { executionProviders: ["wasm"] })]);
+  [meta, session] = await load().catch(() => new Promise(r => setTimeout(r, 1500)).then(load));
   await loadProfiles();
   try {
     video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
