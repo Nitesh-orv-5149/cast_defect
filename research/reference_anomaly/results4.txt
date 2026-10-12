@@ -1,0 +1,10 @@
+shots= 1 seed=1 AUROC=0.881 | x1.0: catch 5% / false-rej 0% | x1.1: catch 1% / false-rej 0% | x1.2: catch 0% / false-rej 0%
+shots= 1 seed=2 AUROC=0.928 | x1.0: catch 2% / false-rej 0% | x1.1: catch 0% / false-rej 0% | x1.2: catch 0% / false-rej 0%
+shots= 3 seed=1 AUROC=0.902 | x1.0: catch 41% / false-rej 0% | x1.1: catch 16% / false-rej 0% | x1.2: catch 6% / false-rej 0%
+shots= 3 seed=2 AUROC=0.950 | x1.0: catch 73% / false-rej 4% | x1.1: catch 50% / false-rej 2% | x1.2: catch 26% / false-rej 0%
+shots= 5 seed=1 AUROC=0.917 | x1.0: catch 36% / false-rej 0% | x1.1: catch 14% / false-rej 0% | x1.2: catch 4% / false-rej 0%
+shots= 5 seed=2 AUROC=0.959 | x1.0: catch 65% / false-rej 3% | x1.1: catch 40% / false-rej 1% | x1.2: catch 18% / false-rej 0%
+shots=10 seed=1 AUROC=0.949 | x1.0: catch 65% / false-rej 2% | x1.1: catch 42% / false-rej 0% | x1.2: catch 20% / false-rej 0%
+shots=10 seed=2 AUROC=0.966 | x1.0: catch 74% / false-rej 3% | x1.1: catch 50% / false-rej 0% | x1.2: catch 22% / false-rej 0%
+shots=20 seed=1 AUROC=0.989 | x1.0: catch 84% / false-rej 1% | x1.1: catch 60% / false-rej 0% | x1.2: catch 36% / false-rej 0%
+shots=20 seed=2 AUROC=0.977 | x1.0: catch 70% / false-rej 2% | x1.1: catch 48% / false-rej 0% | x1.2: catch 20% / false-rej 0%

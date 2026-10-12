@@ -1,0 +1,10 @@
+shots= 1 seed=1 bank= 12544 AUROC=0.881  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 44%
+shots= 1 seed=2 bank= 12544 AUROC=0.928  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 35%
+shots= 3 seed=1 bank= 37632 AUROC=0.902  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 36%
+shots= 3 seed=2 bank= 37632 AUROC=0.950  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 24%
+shots= 5 seed=1 bank= 60000 AUROC=0.917  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 32%
+shots= 5 seed=2 bank= 60000 AUROC=0.959  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 17%
+shots=10 seed=1 bank= 60000 AUROC=0.949  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 22%
+shots=10 seed=2 bank= 60000 AUROC=0.966  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 16%
+shots=20 seed=1 bank= 60000 AUROC=0.989  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 4%
+shots=20 seed=2 bank= 60000 AUROC=0.977  AUTO threshold: catch 0% defects, false-reject 0% good | best-case @95% catch: false-reject 10%
