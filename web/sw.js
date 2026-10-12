@@ -1,6 +1,6 @@
 // Offline support: serve from cache, refresh cache in the background (stale-while-revalidate).
 // Caches the page, model and the onnxruntime CDN files as they are first fetched.
-const CACHE = "cast-inspector-v4";
+const CACHE = "cast-inspector-v5";
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(["./", "meta.json", "model.onnx", "manifest.json"])));

@@ -30,15 +30,43 @@
   #history li { display:flex; align-items:center; gap:10px; padding:6px; border-bottom:1px solid #222; font-size:14px; }
   #history img { width:48px; height:48px; border-radius:4px; }
   #history li button { flex:0; padding:6px 10px; font-size:13px; font-weight:400; background:#333; }
-  .r { color:#ff6b6b; font-weight:700; } .p { color:#5fd47f; font-weight:700; }
+  .r { color:#ff6b6b; font-weight:700; } .p { color:#5fd47f; font-weight:700; } .n { color:#ffb347; font-weight:700; }
+  #verdict.nomatch { background:#b26a00; }
+  select, input[type=text] { width:100%; padding:12px; font-size:16px; border-radius:8px; border:1px solid #333; background:var(--card); color:var(--fg); }
+  .bar { display:flex; gap:8px; margin-bottom:12px; } .bar select { flex:1; } .bar button { flex:0 0 auto; padding:10px 14px; font-size:14px; font-weight:400; background:#333; }
+  #enrol { background:var(--card); border-radius:8px; padding:12px; margin-bottom:12px; display:grid; gap:10px; }
+  #enrol[hidden], #sens[hidden] { display:none; }
+  #enrol h2 { font-size:16px; margin:0; } #enrol p { margin:0; font-size:14px; color:var(--muted); }
+  #enrol .row button, #enrol .row label.btn { font-size:15px; padding:14px; }
+  #thumbs { display:flex; flex-wrap:wrap; gap:6px; } #thumbs img { width:52px; height:52px; border-radius:4px; object-fit:cover; }
+  .chk { font-size:14px; display:flex; gap:8px; align-items:center; }
+  #sens { display:flex; gap:10px; align-items:center; font-size:13px; color:var(--muted); margin-bottom:12px; } #sens input { flex:1; }
 </style>
 </head>
 <body>
 <main>
   <h1>Cast Inspector</h1>
+  <div class="bar">
+    <select id="mode" aria-label="Part type"></select>
+    <button id="delprof" hidden>Delete</button>
+  </div>
+  <section id="enrol" hidden>
+    <h2>New part type: show good parts</h2>
+    <p>Photograph 1–20 defect-free parts with the same distance, lighting and background you will inspect with. More photos = more reliable.</p>
+    <input id="pname" type="text" placeholder="Part name, e.g. Valve body A" maxlength="40">
+    <label class="chk"><input type="checkbox" id="anyrot"> Part can sit at any rotation (round parts)</label>
+    <div class="row">
+      <button id="capgood">Capture good part</button>
+      <label class="btn">Upload photos<input id="upgood" type="file" accept="image/*" multiple hidden></label>
+    </div>
+    <div id="thumbs"></div>
+    <p id="enrolinfo">0 / 20 good photos</p>
+    <div class="row"><button id="finish" disabled>Save reference</button><button id="cancel" style="background:#333">Cancel</button></div>
+  </section>
+  <div id="sens" hidden>Stricter<input id="sensr" type="range" min="0.6" max="1.4" step="0.05" value="1" aria-label="Sensitivity">Looser</div>
   <div class="views">
     <figure><video id="video" autoplay playsinline muted></video><figcaption>Live camera</figcaption></figure>
-    <figure><canvas id="view" class="view" width="448" height="448"></canvas><figcaption>Why it was flagged (Grad-CAM)</figcaption></figure>
+    <figure><canvas id="view" class="view" width="448" height="448"></canvas><figcaption id="viewcap">Why it was flagged (Grad-CAM)</figcaption></figure>
   </div>
   <div id="verdict">Loading model…</div>
   <div class="row">
@@ -73,8 +101,7 @@ async function init() {
     fetch("meta.json").then(r => r.json()),
     ort.InferenceSession.create("model.onnx", { executionProviders: ["wasm"] }),
   ]);
-  verdict.textContent = "Ready: place part under camera";
-  btn.disabled = false;
+  await loadProfiles();
   try {
     video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
   } catch (e) {
@@ -90,68 +117,242 @@ function crop(src, w, h, n) {
   return c;
 }
 
-async function inspect(src, w, h) {
-  const n = meta.size, px = crop(src, w, h, n).getContext("2d").getImageData(0, 0, n, n).data;
+// Canvas -> normalised CHW float tensor data at the model's input size
+function toTensor(c) {
+  const n = meta.size, px = crop(c, c.width, c.height, n).getContext("2d").getImageData(0, 0, n, n).data;
   const x = new Float32Array(3 * n * n);
   for (let i = 0; i < n * n; i++)
     for (let c = 0; c < 3; c++) x[c * n * n + i] = (px[4 * i + c] / 255 - meta.mean[c]) / meta.std[c];
-  const out = await session.run({ input: new ort.Tensor("float32", x, [1, 3, n, n]) });
+  return new ort.Tensor("float32", x, [1, 3, n, n]);
+}
+
+// Pre-trained impeller model: classifier + Grad-CAM
+async function inspectModel(raw) {
+  const out = await session.run({ input: toTensor(raw) });
   const pDefect = out.probs.data[meta.defect_idx];
   const [, K, H, W] = out.features.dims, f = out.features.data, wts = meta.cam_weights;
-
   // Grad-CAM: for a GAP+Linear head the gradient is the fc weight, so CAM = ReLU(sum_k w_k * A_k)
-  const cam = new Float32Array(H * W);
-  for (let k = 0; k < K; k++) for (let j = 0; j < H * W; j++) cam[j] += wts[k] * f[k * H * W + j];
+  const map = new Float32Array(H * W);
+  for (let k = 0; k < K; k++) for (let j = 0; j < H * W; j++) map[j] += wts[k] * f[k * H * W + j];
   let max = 0;
-  for (let j = 0; j < cam.length; j++) { cam[j] = Math.max(0, cam[j]); max = Math.max(max, cam[j]); }
+  for (let j = 0; j < map.length; j++) { map[j] = Math.max(0, map[j]); max = Math.max(max, map[j]); }
+  const reject = pDefect > THRESHOLD, conf = reject ? pDefect : 1 - pDefect;
+  return { mode: "model", verdict: reject ? "REJECT" : "PASS", pDefect, map, H, W, lo: 0, hi: max,
+    detail: `${(conf * 100).toFixed(1)}% confidence` + (reject ? " · heat = regions that drove the defect call" : " · no defect evidence above threshold") };
+}
 
-  const reject = pDefect > THRESHOLD, g = view.getContext("2d");
-  g.globalAlpha = 1;
+async function inspect(src, w, h) {
   const raw = crop(src, w, h, view.width);
+  verdict.className = ""; verdict.textContent = "Inspecting…";
+  const r = active ? await inspectRef(raw, active) : await inspectModel(raw);
+  const { map, H, W, lo, hi } = r, flagged = r.verdict !== "PASS";
+  const t = v => Math.min(1, Math.max(0, (v - lo) / (hi - lo || 1)));
+
+  const g = view.getContext("2d");
+  g.globalAlpha = 1;
   g.drawImage(raw, 0, 0);
-  if (reject && max > 0) {
+  if (flagged && hi > lo) {
     const hm = document.createElement("canvas"); hm.width = W; hm.height = H;
     const img = hm.getContext("2d").createImageData(W, H);
-    cam.forEach((v, j) => { const t = v / max; img.data.set([...jet(t), Math.round(220 * t)], 4 * j); });
+    map.forEach((v, j) => img.data.set([...jet(t(v)), Math.round(220 * t(v))], 4 * j));
     hm.getContext("2d").putImageData(img, 0, 0);
     g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high";
     g.drawImage(hm, 0, 0, view.width, view.height);
   }
 
-  const conf = reject ? pDefect : 1 - pDefect;
-  verdict.className = reject ? "reject" : "pass";
-  verdict.innerHTML = `${reject ? "REJECT" : "PASS"}<small>${(conf * 100).toFixed(1)}% confidence` +
-    `${reject ? " · heat = regions that drove the defect call" : " · no defect evidence above threshold"}</small>`;
+  verdict.className = { PASS: "pass", REJECT: "reject", "NO MATCH": "nomatch" }[r.verdict];
+  verdict.innerHTML = `${r.verdict}<small>${r.detail}</small>`;
   // Where the evidence sits (3x3 zone of the hottest cell) and how much of the part it covers
-  const peak = cam.indexOf(max), zr = Math.floor(peak / W * 3 / H), zc = Math.floor((peak % W) * 3 / W);
+  let peak = 0; map.forEach((v, j) => { if (v > map[peak]) peak = j; });
+  const zr = Math.floor(Math.floor(peak / W) * 3 / H), zc = Math.floor((peak % W) * 3 / W);
   const zone = (["Upper", "Middle", "Lower"][zr] + "-" + ["left", "centre", "right"][zc]).replace("Middle-centre", "Centre");
-  const coverage = max > 0 ? cam.filter(v => v > 0.5 * max).length / cam.length : 0;
-  log.unshift({ id: nextId++, time: new Date().toISOString(), verdict: reject ? "REJECT" : "PASS", pDefect, zone, coverage,
+  const coverage = hi > lo ? map.filter(v => t(v) > 0.5).length / map.length : 0;
+  delete r.map;
+  log.unshift({ ...r, id: nextId++, time: new Date().toISOString(), zone, coverage,
     img: view.toDataURL("image/png"), raw: raw.toDataURL("image/png") });
   try { localStorage.setItem("reportId", nextId); } catch (e) {}
   $("report").hidden = false;
   renderHistory();
 }
 
+// ---------- Reference mode: enrol good parts, flag patches that match none of them (PatchCore-style) ----------
+// NO_MATCH: a defect is a few odd patches; a different object is odd almost everywhere, so compare the median patch distance
+const MAX_REF = 20, BANK_CAP = 30000, CHUNK = 6000, CAL_MAX = 5, NO_MATCH = 1.35, DEFAULT_SENS = 1.0;
+let refBackbone, refNN, profiles = [], active = null, enrolImgs = [];
+
+const idb = () => new Promise((ok, no) => {
+  const r = indexedDB.open("cast-inspector", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("profiles", { keyPath: "name" });
+  r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+});
+async function store(mode, fn) {
+  const d = await idb();
+  return new Promise((ok, no) => {
+    const t = d.transaction("profiles", mode), req = fn(t.objectStore("profiles"));
+    t.oncomplete = () => ok(req.result); t.onerror = () => no(t.error);
+  });
+}
+
+async function refModels() {
+  if (refBackbone) return;
+  verdict.textContent = "Loading reference model…";
+  [refBackbone, refNN] = await Promise.all(["ref_backbone.onnx", "ref_nn.onnx"]
+    .map(f => ort.InferenceSession.create(f, { executionProviders: ["wasm"] })));
+}
+async function patchesOf(c) {
+  const o = await refBackbone.run({ input: toTensor(c) });
+  return { data: o.patches.data, D: o.patches.dims[1] };
+}
+// Distance of every query patch to its nearest bank patch, bank processed in chunks to bound memory
+async function nearest(q, bank, D) {
+  const n = q.length / D, m = bank.length / D, best = new Float32Array(n).fill(Infinity);
+  const qt = new ort.Tensor("float32", q, [n, D]);
+  for (let s = 0; s < m; s += CHUNK) {
+    const k = Math.min(CHUNK, m - s);
+    const o = await refNN.run({ q: qt, b: new ort.Tensor("float32", bank.slice(s * D, (s + k) * D), [k, D]) });
+    o.d.data.forEach((v, i) => { if (v < best[i]) best[i] = v; });
+  }
+  return best;
+}
+const top10 = d => Float32Array.from(d).sort().slice(-10).reduce((a, b) => a + b, 0) / 10;
+const median = d => Float32Array.from(d).sort()[d.length >> 1];
+function rot90(c, k) {
+  const o = document.createElement("canvas"); o.width = o.height = c.width;
+  const g = o.getContext("2d"); g.translate(c.width / 2, c.width / 2); g.rotate(k * Math.PI / 2); g.drawImage(c, -c.width / 2, -c.width / 2);
+  return o;
+}
+// Deterministic subsample of patch rows so the bank stays phone-sized
+function capRows(rows, D, cap) {
+  const n = rows.length / D;
+  if (n <= cap) return rows;
+  let s = 12345; const idx = Array.from({ length: n }, (_, i) => i);
+  for (let i = n - 1; i > 0; i--) { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; const j = s % (i + 1); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+  const out = new Float32Array(cap * D);
+  for (let i = 0; i < cap; i++) out.set(rows.subarray(idx[i] * D, idx[i] * D + D), i * D);
+  return out;
+}
+const concat = (arrs) => { const o = new Float32Array(arrs.reduce((a, b) => a + b.length, 0)); let p = 0; for (const a of arrs) { o.set(a, p); p += a.length; } return o; };
+
+async function buildProfile(name, anyRot, imgs) {
+  await refModels();
+  const views = anyRot ? 4 : 1, per = [], plain = [];
+  let D;
+  for (const [i, c] of imgs.entries()) {
+    verdict.textContent = `Learning good part ${i + 1} of ${imgs.length}…`;
+    const vs = [];
+    for (let k = 0; k < views; k++) { const p = await patchesOf(rot90(c, k)); D = p.D; vs.push(p.data); if (k === 0) plain.push(p.data); }
+    per.push(concat(vs));
+  }
+  // Threshold from normal variation: score good parts against the other good parts (leave-one-out)
+  const cal = [], med = [];
+  const calibrate = d => { cal.push(top10(d)); med.push(median(d)); };
+  if (imgs.length === 1) {
+    const z = imgs[0], zc = document.createElement("canvas"); zc.width = zc.height = z.width;   // slightly zoomed re-view of the only part
+    zc.getContext("2d").drawImage(z, z.width * 0.04, z.width * 0.04, z.width * 0.92, z.width * 0.92, 0, 0, zc.width, zc.width);
+    calibrate(await nearest((await patchesOf(zc)).data, capRows(per[0], D, BANK_CAP), D));
+  } else {
+    for (let i = 0; i < Math.min(CAL_MAX, imgs.length); i++) {
+      verdict.textContent = `Calibrating threshold ${i + 1} of ${Math.min(CAL_MAX, imgs.length)}…`;
+      calibrate(await nearest(plain[i], capRows(concat(per.filter((_, j) => j !== i)), D, BANK_CAP), D));
+    }
+  }
+  const thumbs = imgs.slice(0, 6).map(c => crop(c, c.width, c.height, 96).toDataURL("image/jpeg", 0.7));
+  return { name, anyRot, D, bank: capRows(concat(per), D, BANK_CAP), cal: Math.max(...cal), calMed: Math.max(...med), sens: DEFAULT_SENS,
+           count: imgs.length, thumbs, created: new Date().toISOString() };
+}
+
+async function inspectRef(raw, p) {
+  await refModels();
+  const d = await nearest((await patchesOf(raw)).data, p.bank, p.D);
+  const score = top10(d), thr = p.cal * p.sens;
+  const v = median(d) > NO_MATCH * p.calMed ? "NO MATCH" : score > thr ? "REJECT" : "PASS";
+  const detail = v === "NO MATCH" ? `Doesn't look like “${p.name}”. Check the part type and framing, then retry.`
+    : `Anomaly score ${score.toFixed(2)} vs threshold ${thr.toFixed(2)} · ${p.count} good reference${p.count > 1 ? "s" : ""}` +
+      (v === "REJECT" ? " · heat = areas unlike any good part" : "");
+  return { mode: "ref", profile: p.name, refCount: p.count, score, thr, verdict: v, pDefect: Math.min(1, score / (2 * thr)),
+           map: d, H: 28, W: 28, lo: p.calMed, hi: Math.max(...d, thr), detail };  // colour from "typical good patch" up to the worst patch
+}
+
+function reliability(n) { return n === 0 ? "" : n < 5 ? "low reliability, add more if you can" : n < 10 ? "fair" : n < 20 ? "good" : "best"; }
+function renderEnrol() {
+  $("thumbs").innerHTML = enrolImgs.map(c => `<img src="${crop(c, c.width, c.height, 96).toDataURL("image/jpeg", 0.7)}" alt="">`).join("");
+  $("enrolinfo").textContent = `${enrolImgs.length} / ${MAX_REF} good photos` + (enrolImgs.length ? ` · ${reliability(enrolImgs.length)}` : "");
+  $("finish").disabled = !enrolImgs.length || !$("pname").value.trim();
+}
+function addGood(c) { if (enrolImgs.length < MAX_REF) enrolImgs.push(c); renderEnrol(); }
+
+async function loadProfiles(select) {
+  try { profiles = await store("readonly", s => s.getAll()); } catch (e) { profiles = []; }
+  $("mode").innerHTML = `<option value="">Pump impeller (pre-trained model)</option>` +
+    profiles.map(p => `<option value="${encodeURIComponent(p.name)}">${p.name.replace(/</g, "&lt;")} (${p.count} good refs)</option>`).join("") +
+    `<option value="__new">+ New part type (show good parts)…</option>`;
+  $("mode").value = select ? encodeURIComponent(select) : "";
+  setMode();
+}
+function setMode() {
+  const v = $("mode").value;
+  $("enrol").hidden = v !== "__new";
+  active = v && v !== "__new" ? profiles.find(p => encodeURIComponent(p.name) === v) : null;
+  $("delprof").hidden = $("sens").hidden = !active;
+  if (active) $("sensr").value = active.sens;
+  $("viewcap").textContent = active ? "Where it differs from good parts" : "Why it was flagged (Grad-CAM)";
+  btn.disabled = v === "__new" || !session;
+  if (v === "__new") { enrolImgs = []; renderEnrol(); verdict.className = ""; verdict.textContent = "Show good parts to create the reference"; }
+  else if (session) { verdict.className = ""; verdict.textContent = active ? `Ready: inspecting “${active.name}”` : "Ready: place part under camera"; }
+}
+
+$("mode").onchange = setMode;
+$("pname").oninput = renderEnrol;
+$("capgood").onclick = () => {
+  if (!video.videoWidth) return alert("No camera feed. Use 'Upload photos'.");
+  addGood(crop(video, video.videoWidth, video.videoHeight, view.width));
+};
+$("upgood").onchange = async e => {
+  for (const f of [...e.target.files].slice(0, MAX_REF - enrolImgs.length)) {
+    const im = new Image(); im.src = URL.createObjectURL(f); await im.decode();
+    addGood(crop(im, im.naturalWidth, im.naturalHeight, view.width)); URL.revokeObjectURL(im.src);
+  }
+  e.target.value = "";
+};
+$("cancel").onclick = () => { $("mode").value = ""; setMode(); };
+$("finish").onclick = async () => {
+  const name = $("pname").value.trim();
+  $("finish").disabled = true;
+  try {
+    const p = await buildProfile(name, $("anyrot").checked, enrolImgs);
+    await store("readwrite", s => s.put(p));
+    $("pname").value = ""; $("anyrot").checked = false;
+    await loadProfiles(name);
+  } catch (err) { console.error(err); verdict.textContent = "Could not save reference: " + err.message; $("finish").disabled = false; }
+};
+$("sensr").onchange = async () => { if (!active) return; active.sens = +$("sensr").value; await store("readwrite", s => s.put(active)); setMode(); };
+$("delprof").onclick = async () => {
+  if (!active || !confirm(`Delete the reference for “${active.name}”?`)) return;
+  const name = active.name; await store("readwrite", s => s.delete(name)); await loadProfiles();
+};
+
 function renderHistory() {
   $("history").innerHTML = log.slice(0, 10).map((e, i) => {
     const thumb = `<img src="${e.img}" alt="">`;
-    return `<li>${e.verdict === "REJECT" ? `<a href="${e.img}" download="reject_${e.time.replace(/[:.]/g, "-")}.png" title="Save overlay">${thumb}</a>` : thumb}
-      <span class="${e.verdict === "REJECT" ? "r" : "p"}">${e.verdict}</span>
-      <span>p(defect) ${e.pDefect.toFixed(3)}</span><span style="margin-left:auto;color:var(--muted)">${new Date(e.time).toLocaleTimeString()}</span>
+    return `<li>${e.verdict !== "PASS" ? `<a href="${e.img}" download="flagged_${e.time.replace(/[:.]/g, "-")}.png" title="Save overlay">${thumb}</a>` : thumb}
+      <span class="${{ PASS: "p", REJECT: "r", "NO MATCH": "n" }[e.verdict]}">${e.verdict}</span>
+      <span>${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : `p(defect) ${e.pDefect.toFixed(3)}`}</span><span style="margin-left:auto;color:var(--muted)">${new Date(e.time).toLocaleTimeString()}</span>
       <button data-i="${i}">PDF</button></li>`;
   }).join("");
 }
 
 // Self-contained HTML report (images embedded as data URLs). Open it and Print -> Save as PDF.
 function reportHtml(e) {
-  const reject = e.verdict === "REJECT", conf = reject ? e.pDefect : 1 - e.pDefect;
+  const reject = e.verdict === "REJECT", nomatch = e.verdict === "NO MATCH", flagged = reject || nomatch, ref = e.mode === "ref";
+  const conf = reject ? e.pDefect : 1 - e.pDefect;
   const id = "PART-" + String(e.id).padStart(5, "0"), doc = "QC-" + e.time.slice(0, 10).replace(/-/g, "") + "-" + String(e.id).padStart(5, "0");
   const when = new Date(e.time), pct = v => (v * 100).toFixed(1) + "%";
-  const accent = reject ? "#c4302b" : "#17864a", tint = reject ? "#fdf1f0" : "#eef8f2";
+  const accent = reject ? "#c4302b" : nomatch ? "#b26a00" : "#17864a", tint = reject ? "#fdf1f0" : nomatch ? "#fff6e8" : "#eef8f2";
   const action = reject
     ? "Quarantine this part. Verify the highlighted zone by eye or with dye-penetrant before scrapping or rework."
+    : nomatch ? `The image does not resemble the enrolled “${e.profile}” parts. Check the part type, framing and lighting, then re-inspect.`
     : "Release the part to the next operation. No defect evidence above the decision threshold.";
+  const scoreTxt = ref ? `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}` : `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
   const jetBar = "linear-gradient(90deg,#00007f,#0000ff,#00ffff,#7fff7f,#ffff00,#ff0000,#7f0000)";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Inspection report ${id}</title>
@@ -215,28 +416,28 @@ function reportHtml(e) {
   <section class="verdict">
     <div class="stamp">${e.verdict}</div>
     <div>
-      <h2>${reject ? "Defect detected: part rejected" : "No defect detected: part accepted"}</h2>
-      <p>${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}</p>
+      <h2>${reject ? "Defect detected: part rejected" : nomatch ? "Part does not match the reference: re-inspect" : "No defect detected: part accepted"}</h2>
+      <p>${scoreTxt}</p>
       <div class="gauge"><i></i></div>
-      <div class="gauge-l"><span>0 · Accept</span><span>Threshold ${THRESHOLD}</span><span>Reject · 1</span></div>
+      <div class="gauge-l"><span>Accept</span><span>Threshold${ref ? "" : " " + THRESHOLD}</span><span>Reject</span></div>
     </div>
   </section>
 
   <h3>Summary</h3>
   <div class="kpis">
-    <div><small>Part ID</small><b>${id}</b></div>
+    <div><small>Part ID</small><b>${id}</b>${ref ? `<br><span style="color:var(--sub)">${e.profile.replace(/</g, "&lt;")}</span>` : ""}</div>
     <div><small>Inspected</small><b>${when.toLocaleDateString()}</b><br><span style="color:var(--sub)">${when.toLocaleTimeString()}</span></div>
-    <div><small>Confidence</small><b>${pct(conf)}</b></div>
-    <div><small>${reject ? "Evidence zone" : "Evidence"}</small><b>${reject ? e.zone : "None"}</b>${reject ? `<br><span style="color:var(--sub)">${pct(e.coverage)} of surface</span>` : ""}</div>
+    <div><small>${ref ? "Score / threshold" : "Confidence"}</small><b>${ref ? (e.score / e.thr).toFixed(2) + "×" : pct(conf)}</b></div>
+    <div><small>${flagged ? "Evidence zone" : "Evidence"}</small><b>${flagged ? e.zone : "None"}</b>${flagged ? `<br><span style="color:var(--sub)">${pct(e.coverage)} of surface</span>` : ""}</div>
   </div>
 
   <h3>Visual evidence</h3>
   <div class="imgs">
     <figure><img src="${e.raw}" alt="Captured part">
       <figcaption><b>Captured image</b>Centre-cropped frame as seen by the model</figcaption></figure>
-    <figure>${reject ? `<img src="${e.img}" alt="Grad-CAM overlay">` : `<div class="none"><b>✓ Clean</b>No region exceeded the defect threshold, so no heatmap is drawn.</div>`}
-      <figcaption><b>Grad-CAM explanation</b>${reject ? `Highlighted areas drove the defect decision
-        <div class="legend">Low<span></span>High influence</div>` : "Heatmap shown only for rejected parts"}</figcaption></figure>
+    <figure>${flagged ? `<img src="${e.img}" alt="Heatmap overlay">` : `<div class="none"><b>✓ Clean</b>No region exceeded the defect threshold, so no heatmap is drawn.</div>`}
+      <figcaption><b>${ref ? "Difference from good parts" : "Grad-CAM explanation"}</b>${flagged ? `${ref ? "Highlighted areas look unlike any enrolled good part" : "Highlighted areas drove the defect decision"}
+        <div class="legend">Low<span></span>High ${ref ? "difference" : "influence"}</div>` : "Heatmap shown only for flagged parts"}</figcaption></figure>
   </div>
 
   <h3>Recommended action</h3>
@@ -244,9 +445,12 @@ function reportHtml(e) {
 
   <h3>Inspection parameters</h3>
   <table>
-    <tr><td>Decision rule</td><td>REJECT if p(defect) &gt; ${THRESHOLD}</td></tr>
+    ${ref ? `<tr><td>Decision rule</td><td>REJECT if anomaly score &gt; ${e.thr.toFixed(2)} (set from the variation between enrolled good parts); NO MATCH when the typical patch difference exceeds ${NO_MATCH}× that of good parts</td></tr>
+    <tr><td>Method</td><td>Reference comparison against ${e.refCount} enrolled good part${e.refCount > 1 ? "s" : ""} of “${e.profile.replace(/</g, "&lt;")}”: ImageNet ResNet18 patch features, no defect training</td></tr>
+    <tr><td>Explainability</td><td>Distance of each image patch to the most similar good-part patch (28×28 grid, upsampled)</td></tr>`
+    : `<tr><td>Decision rule</td><td>REJECT if p(defect) &gt; ${THRESHOLD}</td></tr>
     <tr><td>Model</td><td>MobileNetV2 binary classifier (ok / defect), runs on-device</td></tr>
-    <tr><td>Explainability</td><td>Grad-CAM on the final convolutional layer (7×7 grid, upsampled)</td></tr>
+    <tr><td>Explainability</td><td>Grad-CAM on the final convolutional layer (7×7 grid, upsampled)</td></tr>`}
     <tr><td>Report generated</td><td>${new Date().toLocaleString()}</td></tr>
   </table>
 
@@ -318,7 +522,10 @@ $("file").onchange = e => {
   e.target.value = "";
 };
 $("export").onclick = () => {
-  const csv = "time,verdict,p_defect\n" + log.map(e => `${e.time},${e.verdict},${e.pDefect.toFixed(4)}`).join("\n");
+  const q = s => `"${String(s ?? "").replace(/"/g, '""')}"`;
+  const csv = "time,part_type,verdict,p_defect,anomaly_score,threshold\n" + log.map(e =>
+    [e.time, q(e.mode === "ref" ? e.profile : "Pump impeller (pre-trained)"), e.verdict,
+     e.mode === "ref" ? "" : e.pDefect.toFixed(4), e.score?.toFixed(4) ?? "", e.thr?.toFixed(4) ?? ""].join(",")).join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   a.download = "inspection_log.csv"; a.click();
