@@ -122,7 +122,11 @@ async function inspect(src, w, h) {
   verdict.className = reject ? "reject" : "pass";
   verdict.innerHTML = `${reject ? "REJECT" : "PASS"}<small>${(conf * 100).toFixed(1)}% confidence` +
     `${reject ? " · heat = regions that drove the defect call" : " · no defect evidence above threshold"}</small>`;
-  log.unshift({ id: nextId++, time: new Date().toISOString(), verdict: reject ? "REJECT" : "PASS", pDefect,
+  // Where the evidence sits (3x3 zone of the hottest cell) and how much of the part it covers
+  const peak = cam.indexOf(max), zr = Math.floor(peak / W * 3 / H), zc = Math.floor((peak % W) * 3 / W);
+  const zone = (["Upper", "Middle", "Lower"][zr] + "-" + ["left", "centre", "right"][zc]).replace("Middle-centre", "Centre");
+  const coverage = max > 0 ? cam.filter(v => v > 0.5 * max).length / cam.length : 0;
+  log.unshift({ id: nextId++, time: new Date().toISOString(), verdict: reject ? "REJECT" : "PASS", pDefect, zone, coverage,
     img: view.toDataURL("image/png"), raw: raw.toDataURL("image/png") });
   try { localStorage.setItem("reportId", nextId); } catch (e) {}
   $("report").hidden = false;
@@ -142,37 +146,114 @@ function renderHistory() {
 // Self-contained HTML report (images embedded as data URLs). Open it and Print -> Save as PDF.
 function reportHtml(e) {
   const reject = e.verdict === "REJECT", conf = reject ? e.pDefect : 1 - e.pDefect;
-  const id = "PART-" + String(e.id).padStart(5, "0");
+  const id = "PART-" + String(e.id).padStart(5, "0"), doc = "QC-" + e.time.slice(0, 10).replace(/-/g, "") + "-" + String(e.id).padStart(5, "0");
+  const when = new Date(e.time), pct = v => (v * 100).toFixed(1) + "%";
+  const accent = reject ? "#c4302b" : "#17864a", tint = reject ? "#fdf1f0" : "#eef8f2";
+  const action = reject
+    ? "Quarantine this part. Verify the highlighted zone by eye or with dye-penetrant before scrapping or rework."
+    : "Release the part to the next operation. No defect evidence above the decision threshold.";
+  const jetBar = "linear-gradient(90deg,#00007f,#0000ff,#00ffff,#7fff7f,#ffff00,#ff0000,#7f0000)";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Inspection report ${id}</title>
 <style>
-  body { font:15px system-ui, sans-serif; color:#111; background:#fff; max-width:800px; margin:auto; padding:16px; }
-  h1 { font-size:22px; margin:0 0 4px; } .muted { color:#666; }
-  .v { display:inline-block; padding:6px 14px; border-radius:6px; color:#fff; font-weight:700; font-size:20px; background:${reject ? "#c62828" : "#1b8a3a"}; }
-  table { border-collapse:collapse; margin:12px 0; } td { padding:4px 16px 4px 0; } td:first-child { color:#666; }
-  .imgs { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  figure { margin:0; } figure img { width:100%; border:1px solid #ccc; display:block; }
-  figcaption { font-size:13px; color:#444; margin-top:4px; }
-  .none { aspect-ratio:1; border:1px dashed #aaa; display:flex; align-items:center; justify-content:center; text-align:center; padding:12px; color:#666; }
-  @media print { body { padding:0; } .imgs { break-inside:avoid; } .v { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
+  :root { --ink:#141a24; --sub:#5b6474; --line:#e3e7ee; --panel:#f6f8fb; --navy:#0f1b2d; --accent:${accent}; --tint:${tint}; }
+  * { box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  html { background:#e9edf2; }
+  body { margin:24px auto; max-width:820px; background:#fff; color:var(--ink); font:14px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+         box-shadow:0 10px 40px rgba(15,27,45,.12); border-radius:10px; overflow:hidden; }
+  header { background:var(--navy); color:#fff; padding:22px 32px; display:flex; align-items:center; gap:16px; }
+  header svg { flex:none; }
+  header h1 { margin:0; font-size:19px; letter-spacing:.2px; font-weight:600; }
+  header .tag { font-size:12px; color:#9fb0c8; letter-spacing:1.5px; text-transform:uppercase; }
+  header .doc { margin-left:auto; text-align:right; font-size:12px; color:#9fb0c8; }
+  header .doc b { display:block; color:#fff; font-size:14px; font-family:Consolas, "SF Mono", monospace; letter-spacing:.5px; }
+  main { padding:28px 32px 8px; }
+  .verdict { display:grid; grid-template-columns:auto 1fr; gap:24px; align-items:center; background:var(--tint);
+             border:1px solid var(--line); border-left:6px solid var(--accent); border-radius:8px; padding:20px 24px; }
+  .stamp { border:3px solid var(--accent); color:var(--accent); border-radius:6px; padding:8px 18px; font-size:30px; font-weight:800;
+           letter-spacing:3px; transform:rotate(-4deg); }
+  .verdict h2 { margin:0 0 2px; font-size:16px; } .verdict p { margin:0; color:var(--sub); }
+  .gauge { margin-top:12px; position:relative; height:10px; border-radius:5px; background:linear-gradient(90deg,#17864a 0%,#17864a ${THRESHOLD * 100}%,#c4302b ${THRESHOLD * 100}%,#c4302b 100%); opacity:.9; }
+  .gauge i { position:absolute; top:-5px; width:4px; height:20px; border-radius:2px; background:var(--ink); left:calc(${(e.pDefect * 100).toFixed(2)}% - 2px); }
+  .gauge-l { display:flex; justify-content:space-between; font-size:11px; color:var(--sub); margin-top:6px; }
+  h3 { font-size:11px; letter-spacing:1.6px; text-transform:uppercase; color:var(--sub); margin:28px 0 10px; font-weight:600; }
+  .kpis { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .kpis div { padding:12px 14px; border-right:1px solid var(--line); } .kpis div:last-child { border-right:0; }
+  .kpis small { display:block; color:var(--sub); font-size:11px; text-transform:uppercase; letter-spacing:.8px; }
+  .kpis b { font-size:17px; font-variant-numeric:tabular-nums; }
+  .imgs { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  figure { margin:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--panel); display:flex; flex-direction:column; }
+  figure figcaption { flex:1; }
+  figure img, .none { width:100%; aspect-ratio:1; display:block; object-fit:cover; }
+  .none { display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--sub); gap:6px; text-align:center; padding:20px; }
+  .none b { color:#17864a; font-size:15px; }
+  figcaption { padding:10px 12px; font-size:12px; color:var(--sub); border-top:1px solid var(--line); background:#fff; }
+  figcaption b { color:var(--ink); display:block; font-size:13px; }
+  .legend { display:flex; align-items:center; gap:8px; margin-top:6px; font-size:11px; }
+  .legend span { flex:1; height:8px; border-radius:4px; background:${jetBar}; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td { padding:8px 0; border-bottom:1px solid var(--line); vertical-align:top; } td:first-child { color:var(--sub); width:38%; }
+  .action { border:1px solid var(--line); border-radius:8px; padding:14px 16px; display:flex; gap:12px; align-items:flex-start; }
+  .action .dot { flex:none; width:10px; height:10px; border-radius:50%; background:var(--accent); margin-top:5px; }
+  .sign { display:grid; grid-template-columns:repeat(3,1fr); gap:24px; margin-top:8px; }
+  .sign div { border-top:1px solid var(--ink); padding-top:6px; font-size:11px; color:var(--sub); margin-top:36px; }
+  footer { margin-top:28px; padding:14px 32px; background:var(--panel); border-top:1px solid var(--line); font-size:11px; color:var(--sub);
+           display:flex; justify-content:space-between; gap:16px; }
+  @page { size:A4; margin:12mm; }
+  @media print { html { background:#fff; } body { margin:0; box-shadow:none; border-radius:0; max-width:none; } .imgs, .verdict, .sign { break-inside:avoid; } }
+  @media (max-width:600px) { body { margin:0; border-radius:0; } header, main, footer { padding-left:16px; padding-right:16px; }
+    .verdict { grid-template-columns:1fr; } .kpis { grid-template-columns:1fr 1fr; } .kpis div:nth-child(2) { border-right:0; }
+    .kpis div:nth-child(-n+2) { border-bottom:1px solid var(--line); } .imgs, .sign { grid-template-columns:1fr; } }
 </style></head><body>
-<h1>Casting inspection report</h1>
-<div class="muted">Cast Inspector · on-device MobileNetV2 + Grad-CAM</div>
-<table>
-  <tr><td>Report / part ID</td><td><b>${id}</b></td></tr>
-  <tr><td>Inspected</td><td>${new Date(e.time).toLocaleString()}</td></tr>
-  <tr><td>Verdict</td><td><span class="v">${e.verdict}</span></td></tr>
-  <tr><td>Confidence</td><td>${(conf * 100).toFixed(1)}%</td></tr>
-  <tr><td>p(defect)</td><td>${e.pDefect.toFixed(4)}</td></tr>
-  <tr><td>Threshold</td><td>${THRESHOLD} (REJECT if p(defect) &gt; threshold)</td></tr>
-</table>
-<p>${reject ? "Red/yellow regions in the heatmap are the areas that drove the defect decision."
-  : "No defect evidence above the threshold, so no heatmap is shown."}</p>
-<div class="imgs">
-  <figure><img src="${e.raw}" alt="Captured part"><figcaption>Captured image</figcaption></figure>
-  <figure>${reject ? `<img src="${e.img}" alt="Grad-CAM overlay">` : `<div class="none">No heatmap: no defect evidence</div>`}
-    <figcaption>Grad-CAM heatmap overlay</figcaption></figure>
-</div>
+<header>
+  <svg width="38" height="38" viewBox="0 0 38 38" aria-hidden="true"><circle cx="19" cy="19" r="16" fill="none" stroke="#9fb0c8" stroke-width="5"/>
+    <circle cx="19" cy="19" r="5" fill="#9fb0c8"/><circle cx="29" cy="9" r="6" fill="${accent}" opacity=".9"/></svg>
+  <div><div class="tag">Quality Control</div><h1>Casting Inspection Report</h1></div>
+  <div class="doc">Document no.<b>${doc}</b></div>
+</header>
+<main>
+  <section class="verdict">
+    <div class="stamp">${e.verdict}</div>
+    <div>
+      <h2>${reject ? "Defect detected: part rejected" : "No defect detected: part accepted"}</h2>
+      <p>${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}</p>
+      <div class="gauge"><i></i></div>
+      <div class="gauge-l"><span>0 · Accept</span><span>Threshold ${THRESHOLD}</span><span>Reject · 1</span></div>
+    </div>
+  </section>
+
+  <h3>Summary</h3>
+  <div class="kpis">
+    <div><small>Part ID</small><b>${id}</b></div>
+    <div><small>Inspected</small><b>${when.toLocaleDateString()}</b><br><span style="color:var(--sub)">${when.toLocaleTimeString()}</span></div>
+    <div><small>Confidence</small><b>${pct(conf)}</b></div>
+    <div><small>${reject ? "Evidence zone" : "Evidence"}</small><b>${reject ? e.zone : "None"}</b>${reject ? `<br><span style="color:var(--sub)">${pct(e.coverage)} of surface</span>` : ""}</div>
+  </div>
+
+  <h3>Visual evidence</h3>
+  <div class="imgs">
+    <figure><img src="${e.raw}" alt="Captured part">
+      <figcaption><b>Captured image</b>Centre-cropped frame as seen by the model</figcaption></figure>
+    <figure>${reject ? `<img src="${e.img}" alt="Grad-CAM overlay">` : `<div class="none"><b>✓ Clean</b>No region exceeded the defect threshold, so no heatmap is drawn.</div>`}
+      <figcaption><b>Grad-CAM explanation</b>${reject ? `Highlighted areas drove the defect decision
+        <div class="legend">Low<span></span>High influence</div>` : "Heatmap shown only for rejected parts"}</figcaption></figure>
+  </div>
+
+  <h3>Recommended action</h3>
+  <div class="action"><span class="dot"></span><div>${action}</div></div>
+
+  <h3>Inspection parameters</h3>
+  <table>
+    <tr><td>Decision rule</td><td>REJECT if p(defect) &gt; ${THRESHOLD}</td></tr>
+    <tr><td>Model</td><td>MobileNetV2 binary classifier (ok / defect), runs on-device</td></tr>
+    <tr><td>Explainability</td><td>Grad-CAM on the final convolutional layer (7×7 grid, upsampled)</td></tr>
+    <tr><td>Report generated</td><td>${new Date().toLocaleString()}</td></tr>
+  </table>
+
+  <h3>Sign-off</h3>
+  <div class="sign"><div>Inspector</div><div>QC supervisor</div><div>Date</div></div>
+</main>
+<footer><span>Generated by Cast Inspector · AI-assisted decision, verify critical rejects manually</span><span>${doc}</span></footer>
 </body></html>`;
 }
 function downloadReport(e) {
