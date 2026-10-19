@@ -31,12 +31,13 @@ def view_rotation(tilt_deg=0.0, azim_deg=0.0, flip=False):
     return Rz.T @ Rx @ Rz @ R  # tilt about an axis at angle `azim`
 
 
-def render(V, F, R, px_per_mm, size, crease_deg=25.0):
-    """Orthographic z-buffer render. Returns mask (part pixels), holes (background enclosed by the part),
+def render(V, F, R, px_per_mm, size, crease_deg=25.0, cam_dist=0.0):
+    """z-buffer render: orthographic, or perspective when cam_dist (mm from the base plane) is given. Returns mask (part pixels), holes (background enclosed by the part),
     depth (mm, view z, larger = closer), normal (view space), edges (outline + creases + steps)."""
     P = V @ R.T
     c = (size - 1) / 2
-    x, y, z = c + P[:, 0] * px_per_mm, c - P[:, 1] * px_per_mm, P[:, 2]
+    k = cam_dist / np.maximum(cam_dist - P[:, 2], 1.0) if cam_dist else 1.0  # closer = bigger, scale exact at z = 0
+    x, y, z = c + P[:, 0] * px_per_mm * k, c - P[:, 1] * px_per_mm * k, P[:, 2]
     tri = F
     x0, x1, x2 = x[tri[:, 0]], x[tri[:, 1]], x[tri[:, 2]]
     y0, y1, y2 = y[tri[:, 0]], y[tri[:, 1]], y[tri[:, 2]]
@@ -45,7 +46,8 @@ def render(V, F, R, px_per_mm, size, crease_deg=25.0):
     depth = np.full((size, size), -np.inf)
     fid = np.full((size, size), -1, np.int64)
     den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
-    for i in np.nonzero((n[:, 2] > 1e-6) & (np.abs(den) > 1e-9))[0]:
+    front = (np.abs(den) > 1e-9) if cam_dist else ((n[:, 2] > 1e-6) & (np.abs(den) > 1e-9))  # z-buffer resolves occlusion
+    for i in np.nonzero(front)[0]:
         xa, xb = int(max(0, math.floor(min(x0[i], x1[i], x2[i])))), int(min(size - 1, math.ceil(max(x0[i], x1[i], x2[i]))))
         ya, yb = int(max(0, math.floor(min(y0[i], y1[i], y2[i])))), int(min(size - 1, math.ceil(max(y0[i], y1[i], y2[i]))))
         if xa > xb or ya > yb:
@@ -141,13 +143,15 @@ class Profile:
     coarse: int = 96
 
 
-def build_profile(V, F, size=320, tilts=(0, 6, 12, 18), azims=8, flip=False):
-    r = float(np.max(np.linalg.norm(V[:, :2], axis=1)))  # CAD origin = part axis
+def build_profile(V, F, size=320, tilts=(0, 6, 12, 18), azims=8, flip=False, cam_dist=0.0):
+    lo, hi = V.min(0), V.max(0)
+    V = V - np.array([(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, 0.0])  # any CAD origin: centre the footprint
+    r = float(np.max(np.linalg.norm(V[:, :2], axis=1)))
     ppm = (size * 0.42) / r
     prof = Profile(V, F, r, size=size, px_per_mm=ppm)
     for t in tilts:
         for a in ([0.0] if t == 0 else np.arange(azims) * 360.0 / azims):
-            rd = render(V, F, view_rotation(t, a, flip), ppm, size)
+            rd = render(V, F, view_rotation(t, a, flip), ppm, size, cam_dist=cam_dist)
             rd["raised"] = raised_regions(rd, ppm)
             prof.views.append((t, a, rd))
     return prof

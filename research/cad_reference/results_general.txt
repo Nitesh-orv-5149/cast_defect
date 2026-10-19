@@ -1,0 +1,30 @@
+
+=== bracket (orthographic templates), geometry checks, default thresholds
+group                                n  correct  PASS REJECT WRONG   IoU min/med      feature ratio min/med   reasons
+defect/blocked_hole                 10     100%     0     10     0   0.949/0.968      1.53/ 4.46           {'blocked_hole': 10, 'unexpected_hole': 4, 'excess_material': 4}
+defect/chipped_corner               10     100%     0     10     0   0.957/0.969      1.97/ 3.47           {'missing_material': 10, 'unexpected_hole': 2}
+defect/through_blowhole             10     100%     0     10     0   0.962/0.975      1.90/ 4.43           {'unexpected_hole': 13}
+good/clean                          20      80%    16      4     0   0.962/0.978      2.30/ 5.69           {'unexpected_hole': 5}
+good/stained                        10      70%     7      3     0   0.966/0.973      2.19/ 4.67           {'unexpected_hole': 4}
+handheld/good                       10      60%     6      4     0   0.944/0.963      1.77/ 4.05           {'unexpected_hole': 5, 'blocked_hole': 2}
+other/bottom_face                   12     100%     0      0    12   0.891/0.900      1.33/ 1.39           {'mismatch': 12}
+other/bracket_2_bosses              12       8%     0     11     1   0.956/0.966      1.32/ 2.60           {'blocked_hole': 11, 'excess_material': 3, 'unexpected_hole': 4, 'mismatch': 1}
+other/bracket_without_slot          12       0%     0     12     0   0.930/0.943      1.66/ 3.81           {'blocked_hole': 12, 'unexpected_hole': 29, 'excess_material': 12}
+other/impeller_casting               6     100%     0      0     6   0.613/0.623      1.12/ 1.26           {'mismatch': 6}
+other/mirrored_bracket              12     100%     0      0    12   0.880/0.888      1.36/ 2.08           {'mismatch': 12}
+good parts with a designed hole flagged: 11/40
+
+=== housing (orthographic templates), geometry checks, default thresholds
+group                                n  correct  PASS REJECT WRONG   IoU min/med      feature ratio min/med   reasons
+defect/blocked_hole                 10      40%     0      4     6   0.946/0.960      1.10/ 1.28           {'mismatch': 6, 'blocked_hole': 4, 'unexpected_hole': 7, 'excess_material': 4}
+defect/chipped_corner               10      10%     0      1     9   0.960/0.965      1.17/ 1.34           {'mismatch': 9, 'unexpected_hole': 1, 'missing_material': 1}
+defect/through_blowhole             10      30%     0      3     7   0.962/0.968      1.13/ 1.32           {'mismatch': 7, 'unexpected_hole': 6}
+good/clean                          20      10%     2      4    14   0.956/0.971      1.02/ 1.37           {'mismatch': 14, 'unexpected_hole': 7}
+good/stained                        10       0%     0      4     6   0.965/0.968      0.86/ 1.35           {'unexpected_hole': 4, 'mismatch': 6}
+handheld/good                       10      10%     1      9     0   0.953/0.961      1.49/ 3.50           {'unexpected_hole': 17}
+other/2_bolt_holes                  12      92%     0      1    11   0.941/0.953      1.23/ 1.34           {'mismatch': 11, 'blocked_hole': 2, 'unexpected_hole': 2, 'excess_material': 2}
+other/body_33mm_not_28              12     100%     0      0    12   0.952/0.966      1.04/ 1.16           {'mismatch': 12}
+other/bore_22mm_not_18              12      42%     0      7     5   0.916/0.920      0.93/ 1.48           {'unexpected_hole': 7, 'excess_material': 3, 'mismatch': 5}
+other/bottom_face                   12     100%     0      0    12   0.938/0.966      1.17/ 1.28           {'mismatch': 12}
+other/impeller_casting               6     100%     0      0     6   0.766/0.767      1.29/ 1.39           {'mismatch': 6}
+good parts with a designed hole flagged: 17/40

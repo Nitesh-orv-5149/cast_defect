@@ -168,6 +168,26 @@ What we learned along the way:
 - Template views up to 18° tilt are needed for handheld shots; at 20° a 6 mm deep hole looks half blocked unless the template models the wall, which the z-buffer does.
 - The bottom face of this part has the same hole pattern as the top (3-fold symmetry), so "wrong face" is caught by the feature-edge ratio (bottom max 1.33 vs good min 1.57), a thin margin worth watching with real photos.
 
+### Does it work for other castings? (`make_parts_general.py`, `eval_general.py`)
+
+Same code and default thresholds, only the CAD file changes. Two very different parts, 248 photos: an asymmetric **L-bracket** (ribs, bosses, a slot; its mirror image is a classic wrong part) and a tall **pump housing** (35 mm body on a square flange, 45 mm deep bore). Full tables in `results_general.txt` (orthographic templates) and `results_general_persp.txt`.
+
+**Perspective templates are required for anything that isn't flat.** With orthographic templates the housing failed (good parts 0-10% PASS) because a phone at ~240 mm sees the top of a 35 mm body ~17% bigger than its base, and it sees the walls inside deep holes. Rendering the templates with perspective (camera distance from the part's known CAD size and its apparent size; fixed at 242 mm in this test) fixes it:
+
+| | L-bracket | Pump housing |
+|---|---|---|
+| Good parts: clean / stained | 100% / 100% PASS | 100% / 100% PASS |
+| Good, handheld 10-20° | 100% | 40% (tall part + tilt: deep holes look different from every 45° template direction) |
+| Designed holes flagged on good parts (station) | 0 / 30 | 0 / 30 |
+| Blocked hole / chipped corner / extra through-hole | 100% / 100% / 100% | 100% / 100% / 100% |
+| A different casting (the impeller) | 100% WRONG PART | 100% WRONG PART |
+| Mirrored part | 100% WRONG PART | n/a (symmetric) |
+| Upside down | 100% WRONG PART | 100% flagged (92% as REJECT) |
+| Near-variant: one boss/hole missing, slot missing, 2 bolt holes, bigger bore | 100% flagged, mostly as REJECT ("blocked hole", "unexpected hole") rather than WRONG PART | 100% flagged |
+| Near-variant: body Ø33 instead of Ø28 (same outline, no holes changed) | n/a | **missed: 83% PASS** |
+
+So the geometry layer generalises: anything that changes the **outline or the holes** is caught on all three parts. Its blind spot is the same on every part: a change to an **interior raised feature** (bigger body, broken blade, missing rib) that leaves outline and holes alone. Edge evidence for those depends on lighting (good housings score 1.9-13 on the feature ratio, the Ø33 body up to 6.2), which is what M0b is for.
+
 **Next (M0b):** fine defects need controlled light and/or good photos. Test (1) a ring/dome-light station (shading no longer depends on part rotation) with the CAD-only feature and stray checks, and (2) the surface layer: 5-10 enrolled good photos aligned to the CAD, position-aware comparison.
 
 ## Milestones
