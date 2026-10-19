@@ -105,6 +105,21 @@ The same alignment engine improves tab 2 without needing a CAD:
 - **Setup assumption:** roughly top-down camera (within ±10°) with a contrasting background. The current dataset and the use case are both a fixed inspection station. This must be shown in the UI.
 - **Limitations:** CAD alone can't judge surface texture (that needs good photos); very shallow defects don't change outline or edges; shiny parts and strong shadows can break segmentation; heavy camera tilt adds perspective error.
 
+## Server (Vercel)
+
+Vercel Functions are CPU-only (no GPU), with a small request body limit, so the per-photo inspection stays on the device (fast, works offline, photos stay private). The server takes the jobs that happen once per part or need sharing:
+
+| Job | Where | Why |
+|---|---|---|
+| Per-photo inspection (segment, align, checks) | Phone | Fast, offline, private; needs no GPU |
+| Shared part profiles (CAD, templates, enrolled references) | Vercel Function + Vercel Blob | Set a part up once, every phone at the station gets it (today profiles are per-device IndexedDB) |
+| STEP/IGES conversion and template rendering | Vercel Function, once per part | Phones download a small precomputed profile instead of the OpenCascade wasm |
+| Inspection log (verdicts, reports) | Vercel Function + database | Central history instead of per-phone CSV |
+| Heavier CPU models (e.g. DINOv2-small surface check) | Vercel Function, only if the offline eval shows a clear win | A trade of latency for accuracy |
+| GPU pose models (FoundationPose / GigaPose) | Not Vercel; a GPU host (Modal, Replicate, RunPod, HF endpoints) behind a Vercel function | Only if handheld inspection is required; adds per-call cost, latency and a network dependency |
+
+Large uploads (CAD files, photos) go straight to Blob with client uploads rather than through a function body.
+
 ## How we'll know it works (before building UI)
 
 Same approach as `research/reference_anomaly/`: prototype in Python (trimesh + pyrender + OpenCV) under `research/cad_reference/`, measure, then port.
