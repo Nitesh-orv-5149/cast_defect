@@ -34,12 +34,12 @@
   /* Liquid glass */
   .glass, #verdict { position:relative; isolation:isolate; border:1px solid rgba(255,255,255,.1);
     background:linear-gradient(140deg, rgba(255,255,255,.028), rgba(255,255,255,0) 50%, rgba(255,255,255,.016));
-    -webkit-backdrop-filter:blur(3.5px) saturate(125%); backdrop-filter:blur(3.5px) saturate(125%);
     box-shadow:inset 1.5px 1.5px 0 -.5px rgba(255,255,255,.42), inset -1px -1px 0 -.5px rgba(255,255,255,.16),
       inset 0 0 18px rgba(255,255,255,.035), 0 10px 28px rgba(0,0,0,.28); }
   .glass::before, #verdict::before { content:""; position:absolute; inset:0; z-index:-1; border-radius:inherit; pointer-events:none;
     background:radial-gradient(90% 60% at 25% -15%, rgba(255,255,255,.16), transparent 60%),
       radial-gradient(70% 45% at 80% 120%, rgba(255,255,255,.07), transparent 65%); }
+  .navbar, .sheet, #flip, #inspect { -webkit-backdrop-filter:blur(3.5px) saturate(125%); backdrop-filter:blur(3.5px) saturate(125%); }
   button.glass, label.glass { border-radius:999px; padding:13px 20px; font-weight:500; cursor:pointer; text-align:center;
     transition:transform .15s, background .2s, box-shadow .2s, opacity .2s; -webkit-tap-highlight-color:transparent; }
   button.glass:hover:not(:disabled), label.glass:hover { background:linear-gradient(140deg, rgba(255,255,255,.1), rgba(255,255,255,.025) 50%, rgba(255,255,255,.06)); }
@@ -55,10 +55,10 @@
   .navbar button { position:relative; z-index:1; display:flex; align-items:center; gap:8px; padding:10px 18px; border:0; border-radius:999px;
     background:none; color:var(--muted); font-size:14px; font-weight:500; white-space:nowrap; cursor:pointer; transition:color .2s; }
   .navbar > button:hover { color:#d9cdd0; }
-  #navpill { position:absolute; top:6px; bottom:6px; left:6px; z-index:2; overflow:hidden; border-radius:999px; pointer-events:none;
+  #navpill { position:absolute; top:6px; bottom:6px; left:0; z-index:2; transform-origin:0 50%; will-change:transform; overflow:hidden; border-radius:999px; pointer-events:none;
     background:linear-gradient(140deg, rgba(196,58,80,.22), rgba(122,31,43,.04) 55%, rgba(163,41,59,.14));
     box-shadow:inset 1.5px 1.5px 0 -.5px rgba(255,215,222,.55), inset -1px -1px 0 -.5px rgba(255,180,190,.25), inset 0 0 12px rgba(255,160,175,.12), 0 6px 18px rgba(122,31,43,.35); }
-  .navtrack { position:absolute; top:0; bottom:0; display:flex; gap:2px; }
+  .navtrack { position:absolute; top:0; bottom:0; left:0; display:flex; gap:2px; transform-origin:0 50%; will-change:transform; }
   .navtrack button { color:#fff; text-shadow:0 0 12px rgba(255,170,185,.45); }
   .navbar .s { display:none; }
 
@@ -112,14 +112,14 @@
   .hud { position:absolute; top:12px; left:12px; right:12px; z-index:3; display:flex; gap:6px; align-items:center; }
   .hud .end { margin-left:auto; }
   .tag { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border-radius:999px; font-size:11px; font-weight:600; letter-spacing:.08em;
-    text-transform:uppercase; white-space:nowrap; color:#fff; background:rgba(12,6,8,.45); border:1px solid rgba(255,255,255,.14);
-    -webkit-backdrop-filter:blur(14px) saturate(160%); backdrop-filter:blur(14px) saturate(160%); }
+    text-transform:uppercase; white-space:nowrap; color:#fff; background:rgba(12,6,8,.6); border:1px solid rgba(255,255,255,.14); }
   .tag:empty { display:none; }
   .tag.pass { background:rgba(47,191,113,.3); border-color:rgba(127,240,176,.45); }
   .tag.reject { background:rgba(255,77,94,.32); border-color:rgba(255,150,160,.5); }
   .tag.nomatch { background:rgba(255,179,71,.3); border-color:rgba(255,210,150,.5); }
-  .dot { width:7px; height:7px; border-radius:50%; background:#ff3b52; animation:pulse 1.6s infinite; }
-  @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(255,59,82,.7); } 70% { box-shadow:0 0 0 7px rgba(255,59,82,0); } 100% { box-shadow:0 0 0 0 rgba(255,59,82,0); } }
+  .dot { position:relative; width:7px; height:7px; border-radius:50%; background:#ff3b52; }
+  .dot::after { content:""; position:absolute; inset:0; border-radius:50%; background:#ff3b52; animation:pulse 1.6s ease-out infinite; }
+  @keyframes pulse { from { transform:scale(1); opacity:.7; } 70%, to { transform:scale(3); opacity:0; } }
   button.icon { padding:8px !important; display:grid; place-items:center; }
   /* Corner brackets: the model sees exactly this square */
   .reticle { position:absolute; inset:11%; z-index:2; pointer-events:none; }
@@ -129,11 +129,11 @@
   .reticle i:nth-child(3) { bottom:0; left:0; border-bottom-width:3px; border-left-width:3px; border-bottom-left-radius:14px; }
   .reticle i:nth-child(4) { bottom:0; right:0; border-bottom-width:3px; border-right-width:3px; border-bottom-right-radius:14px; }
   .hint { position:absolute; left:50%; bottom:14px; transform:translateX(-50%); z-index:3; white-space:nowrap; }
-  .scan { position:absolute; left:0; right:0; top:-35%; height:35%; z-index:2; opacity:0; pointer-events:none;
+  .scan { position:absolute; left:0; right:0; top:0; height:35%; transform:translateY(-100%); z-index:2; opacity:0; pointer-events:none;
     background:linear-gradient(180deg, transparent, rgba(232,120,138,.32)); border-bottom:2px solid var(--maroon-hi); }
   .stage.busy .scan { opacity:1; animation:scan .9s linear infinite; }
   .stage.busy .reticle i { border-color:var(--maroon-hi); }
-  @keyframes scan { to { top:100%; } }
+  @keyframes scan { to { transform:translateY(286%); } }
   .empty { position:absolute; inset:0; z-index:2; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
     padding:24px; text-align:center; color:var(--muted); font-size:13px; background:radial-gradient(circle at 50% 42%, rgba(122,31,43,.28), transparent 62%), #070405; }
   .empty svg { width:40px; height:40px; stroke-width:1.4; color:var(--maroon-hi); margin-bottom:8px; }
@@ -149,7 +149,7 @@
   #verdict.reject { background:linear-gradient(140deg, rgba(255,77,94,.27), rgba(140,24,40,.08)); border-color:rgba(255,150,160,.45); }
   #verdict.nomatch { background:linear-gradient(140deg, rgba(255,179,71,.22), rgba(130,80,10,.07)); border-color:rgba(255,210,150,.45); }
   .actions { margin-bottom:12px; }
-  #inspect { width:100%; padding:18px; font-size:18px; font-weight:700; letter-spacing:.14em; -webkit-backdrop-filter:blur(28px) saturate(200%); backdrop-filter:blur(28px) saturate(200%); }
+  #inspect { width:100%; padding:18px; font-size:18px; font-weight:700; letter-spacing:.14em; }
   #inspect:disabled { opacity:1; color:rgba(255,255,255,.4); filter:saturate(.35); }
   .sect { margin:24px 4px 10px; font-size:12px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
   #history { list-style:none; padding:0; margin:0; display:grid; gap:8px; }
@@ -550,36 +550,46 @@ async function setTab(t) {
   const moving = [...main.children, $("sub"), $("viewcap"), verdict];
   const leaving = [...main.querySelectorAll(":scope > section:not([hidden])"), $("sub"), $("viewcap"), verdict];
   const before = new Map([...main.children].filter(el => !el.hidden).map(el => [el, el.getBoundingClientRect().top]));
-  await Promise.all(leaving.map(el => el.animate([{}, { opacity: 0, filter: "blur(10px)", transform: `translateX(${-dir * 30}px) scale(.98)` }],
+  await Promise.all(leaving.map(el => el.animate([{}, { opacity: 0, transform: `translateX(${-dir * 30}px) scale(.98)` }],
     { duration: 170, easing: "cubic-bezier(.5,0,.9,.6)", fill: "forwards" }).finished.catch(() => {})));
   if (id !== switching) return;  // a newer tap took over
   moving.forEach(el => el.getAnimations().forEach(a => a.cancel()));
   tab = t; setMode();
   // ...then blocks that stay glide to their new place, and new ones and changed text blur in from the travel direction
   const ease = "cubic-bezier(.2,.9,.25,1)";
-  for (const el of main.children) {
-    if (el.hidden) continue;
-    const top = before.get(el);
-    if (top === undefined) el.animate([{ opacity: 0, filter: "blur(12px)", transform: `translateX(${dir * 40}px) scale(.97)` }, { opacity: 1, filter: "blur(0)", transform: "none" }], { duration: 560, easing: ease });
-    else if (Math.abs(top - el.getBoundingClientRect().top) > 1) el.animate([{ transform: `translateY(${top - el.getBoundingClientRect().top}px)` }, { transform: "none" }], { duration: 560, easing: ease });
+  // Read every new position before starting any animation, so layout runs once instead of once per block
+  const after = [...main.children].filter(el => !el.hidden).map(el => [el, before.get(el), el.getBoundingClientRect().top]);
+  for (const [el, top, now] of after) {
+    if (top === undefined) el.animate([{ opacity: 0, transform: `translateX(${dir * 40}px) scale(.97)` }, { opacity: 1, transform: "none" }], { duration: 560, easing: ease });
+    else if (Math.abs(top - now) > 1) el.animate([{ transform: `translateY(${top - now}px)` }, { transform: "none" }], { duration: 560, easing: ease });
   }
-  for (const el of [$("sub"), $("viewcap"), verdict])
-    el.animate([{ opacity: 0, filter: "blur(8px)", transform: `translateX(${dir * 18}px)` }, { opacity: 1, filter: "blur(0)", transform: "none" }], { duration: 480, easing: ease });
+  $("sub").animate([{ opacity: 0, filter: "blur(6px)", transform: `translateX(${dir * 18}px)` }, { opacity: 1, filter: "blur(0)", transform: "none" }], { duration: 480, easing: ease });
+  for (const el of [$("viewcap"), verdict])
+    el.animate([{ opacity: 0, transform: `translateX(${dir * 18}px)` }, { opacity: 1, transform: "none" }], { duration: 480, easing: ease });
 }
 
 // Pill moves like a drop of liquid: the leading edge shoots ahead, the trailing edge catches up
 let pillAt = null;
+// Everything is transform-only so it runs on the compositor: the pill is laid out at the target width and scaled
+// along the path; the label copy gets the inverse transform so it stays put while the pill slides over it.
 function movePill() {
-  const b = navBtns.find(x => x.classList.contains("on")), to = [b.offsetLeft, b.offsetWidth], from = pillAt ?? to, x0 = navBtns[0].offsetLeft;
-  const box = ([l, w]) => ({ left: l + "px", width: w + "px" }), track = ([l]) => ({ left: x0 - l + "px" });
+  const b = navBtns.find(x => x.classList.contains("on")), to = [b.offsetLeft, b.offsetWidth], from = pillAt ?? to, x0 = navBtns[0].offsetLeft, W = to[1];
+  const pill = ([l, w]) => ({ transform: `translateX(${l}px) scaleX(${w / W})` });
+  const track = ([l, w]) => ({ transform: `scaleX(${W / w}) translateX(${x0 - l}px)` });
   pillAt = to;
-  Object.assign($("navpill").style, box(to)); Object.assign(navTrack.style, track(to));
+  $("navpill").style.width = W + "px";
+  Object.assign($("navpill").style, pill(to)); Object.assign(navTrack.style, track(to));
   if (from[0] === to[0] || calm()) return;
-  const fwd = to[0] > from[0], lerp = (a, b, k) => a + (b - a) * k;
-  const L = lerp(from[0], to[0], fwd ? .15 : .85), R = lerp(from[0] + from[1], to[0] + to[1], fwd ? .85 : .15), mid = [L, R - L];
-  const opts = { duration: 620, easing: "cubic-bezier(.3,.8,.25,1)" };
-  $("navpill").animate([box(from), { ...box(mid), offset: .45 }, box(to)], opts);
-  navTrack.animate([track(from), { ...track(mid), offset: .45 }, track(to)], opts);
+  // Leading edge shoots ahead, trailing edge starts late and catches up; sampled so pill and copy stay locked together
+  const fwd = to[0] > from[0], lead = t => 1 - (1 - t) ** 3.2, trail = t => t < .1 ? 0 : 1 - (1 - (t - .1) / .9) ** 2.6;
+  const at = t => {
+    const [kl, kr] = fwd ? [trail(t), lead(t)] : [lead(t), trail(t)];
+    const l = from[0] + (to[0] - from[0]) * kl, r = from[0] + from[1] + (to[0] + to[1] - from[0] - from[1]) * kr;
+    return [l, r - l];
+  };
+  const steps = Array.from({ length: 25 }, (_, i) => at(i / 24)), opts = { duration: 600, easing: "linear" };
+  $("navpill").animate(steps.map(pill), opts);
+  navTrack.animate(steps.map(track), opts);
 }
 const snapPill = () => { pillAt = null; movePill(); };
 snapPill(); document.fonts?.ready.then(snapPill); addEventListener("resize", snapPill);
