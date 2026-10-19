@@ -1,0 +1,50 @@
+{
+ "photo_01": {
+  "kind": "good",
+  "truth": "good part"
+ },
+ "photo_02": {
+  "kind": "defect",
+  "truth": "chipped big-end rim"
+ },
+ "photo_03": {
+  "kind": "good",
+  "truth": "good part"
+ },
+ "photo_04": {
+  "kind": "good",
+  "truth": "good part"
+ },
+ "photo_05": {
+  "kind": "other",
+  "truth": "same rod upside down (wrong face)"
+ },
+ "photo_06": {
+  "kind": "defect",
+  "truth": "blocked lug hole"
+ },
+ "photo_07": {
+  "kind": "defect",
+  "truth": "small-end bore not cored (solid)"
+ },
+ "photo_08": {
+  "kind": "other",
+  "truth": "a different casting (pump housing)"
+ },
+ "photo_09": {
+  "kind": "other",
+  "truth": "rod without bolt lugs"
+ },
+ "photo_10": {
+  "kind": "other",
+  "truth": "shorter rod (95 mm centres instead of 110)"
+ },
+ "photo_11": {
+  "kind": "defect",
+  "truth": "blowhole through the pocket floor"
+ },
+ "photo_12": {
+  "kind": "good",
+  "truth": "good part"
+ }
+}
