@@ -1,0 +1,88 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script type="importmap">{ "imports": { "three": "../data/three/build/three.module.js", "three/addons/": "../data/three/examples/jsm/" } }</script>
+</head><body style="margin:0;background:#000">
+<script type="module">
+// Synthetic "camera" for M0: physically based metal with a procedural sand-cast surface on a coloured mat.
+// Deliberately different from the CPU template renderer so the evaluation is not circular.
+import * as THREE from "three";
+import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+const N = 512;
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(N, N);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.append(renderer.domElement);
+const env = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+const loader = new STLLoader(), cache = {};
+
+const NOISE = `
+  float h31(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+  float vnoise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(h31(i), h31(i + vec3(1,0,0)), f.x), mix(h31(i + vec3(0,1,0)), h31(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(h31(i + vec3(0,0,1)), h31(i + vec3(1,0,1)), f.x), mix(h31(i + vec3(0,1,1)), h31(i + vec3(1,1,1)), f.x), f.y), f.z); }
+  float fbm(vec3 p) { return 0.55 * vnoise(p) + 0.3 * vnoise(p * 2.03) + 0.15 * vnoise(p * 4.1); }`;
+
+function roughSurface(mat, u) {
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, { uSeed: { value: u.seed }, uFreq: { value: u.freq }, uBump: { value: u.bump }, uStain: { value: u.stain } });
+    sh.vertexShader = sh.vertexShader.replace("#include <common>", "#include <common>\nvarying vec3 vWP;")
+      .replace("#include <project_vertex>", "#include <project_vertex>\nvWP = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    sh.fragmentShader = sh.fragmentShader.replace("#include <common>", `#include <common>
+      varying vec3 vWP; uniform float uSeed, uFreq, uBump, uStain; ${NOISE}`)
+      .replace("#include <color_fragment>", `#include <color_fragment>
+      float st = smoothstep(0.58, 0.78, fbm(vWP * 0.07 + uSeed * 3.1));
+      diffuseColor.rgb *= 1.0 - uStain * st * 0.65;
+      diffuseColor.rgb *= 0.88 + 0.24 * fbm(vWP * 0.35 + uSeed);`)
+      .replace("#include <normal_fragment_maps>", `#include <normal_fragment_maps>
+      { vec3 p = vWP * uFreq + uSeed; float e = 0.05, n0 = fbm(p);
+        vec3 g = vec3(fbm(p + vec3(e,0,0)) - n0, fbm(p + vec3(0,e,0)) - n0, fbm(p + vec3(0,0,e)) - n0) / e;
+        vec3 gv = (viewMatrix * vec4(g, 0.0)).xyz;
+        normal = normalize(normal - uBump * (gv - dot(gv, normal) * normal)); }`);
+  };
+  return mat;
+}
+
+async function geom(url) {
+  if (!cache[url]) { const g = loader.parse(await (await fetch(url)).arrayBuffer()); g.computeVertexNormals(); g.computeBoundingBox(); cache[url] = g; }
+  return cache[url];
+}
+
+window.render = async p => {
+  const R = mulberry(p.seed), U = (a, b) => a + (b - a) * R();
+  const scene = new THREE.Scene();
+  scene.environment = env; scene.environmentIntensity = U(0.35, 0.9);
+  const hue = R() < 0.5 ? U(0.27, 0.40) : U(0.53, 0.62);
+  const mat = new THREE.Mesh(new THREE.PlaneGeometry(600, 600),
+    roughSurface(new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(hue, U(0.4, 0.75), U(0.16, 0.36)), roughness: 0.92 }),
+      { seed: U(0, 50), freq: 0.6, bump: 0.15, stain: 0 }));
+  mat.receiveShadow = true; scene.add(mat);
+  const g = await geom(p.stl);
+  const grey = U(0.3, 0.5);
+  const part = new THREE.Mesh(g, roughSurface(new THREE.MeshStandardMaterial({ color: new THREE.Color(grey, grey, grey * U(0.97, 1.03)),
+    metalness: U(0.45, 0.8), roughness: U(0.5, 0.8) }), { seed: U(0, 50), freq: U(1.2, 2.4), bump: U(0.25, 0.6), stain: p.stain ? U(0.6, 1) : 0 }));
+  part.castShadow = part.receiveShadow = true;
+  if (p.flip) { part.rotation.x = Math.PI; part.position.z = g.boundingBox.max.z; }
+  const holder = new THREE.Group(); holder.add(part); holder.rotation.z = p.rot * Math.PI / 180;
+  holder.position.set(p.tx, p.ty, 0.01); scene.add(holder);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x404040, U(0.3, 0.8)));
+  const sun = new THREE.DirectionalLight(0xffffff, U(1.4, 3.2)), el = U(32, 75) * Math.PI / 180, az = U(0, 2 * Math.PI);
+  sun.position.set(300 * Math.cos(el) * Math.cos(az), 300 * Math.cos(el) * Math.sin(az), 300 * Math.sin(el));
+  sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.radius = U(2, 6);
+  Object.assign(sun.shadow.camera, { left: -120, right: 120, top: 120, bottom: -120, near: 10, far: 800 });
+  scene.add(sun);
+  const cam = new THREE.PerspectiveCamera(35, 1, 10, 2000), t = p.tilt * Math.PI / 180, ca = p.tiltAz * Math.PI / 180;
+  const target = new THREE.Vector3(0, 0, 4);
+  cam.position.set(p.dist * Math.sin(t) * Math.cos(ca), p.dist * Math.sin(t) * Math.sin(ca), 4 + p.dist * Math.cos(t));
+  cam.up.set(0, 1, 0); cam.lookAt(target);
+  renderer.toneMappingExposure = U(0.8, 1.2);
+  renderer.render(scene, cam);
+  mat.geometry.dispose(); mat.material.dispose(); part.material.dispose();
+  return renderer.domElement.toDataURL("image/png");
+};
+function mulberry(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+window.ready = true;
+</script></body></html>

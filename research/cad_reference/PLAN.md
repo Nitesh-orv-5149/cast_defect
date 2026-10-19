@@ -144,11 +144,37 @@ Same approach as `research/reference_anomaly/`: prototype in Python (trimesh + p
 - **Real check:** a small set of real photos of the actual part: good, defective, and a different casting.
 - **Metrics:** wrong-part detection rate; false rejects on good parts; defect catch rate per type; and **designed holes flagged as defects, which must be 0**.
 
+## M0 results (synthetic, CAD-only, no good photos)
+
+No real CAD or photos were available, so M0 builds its own: `make_parts.py` generates a parametric impeller casting (6 curved blades, hub with a through bore, 3 designed balance holes), 24 defective variants (through blowhole, blind pits, blocked balance hole, chipped rim, broken blade, crack) and 3 other castings (flange, 5-blade impeller, square plate). `photo/photo.html` renders "photos" with three.js in headless Chromium: physically based metal with a procedural sand-cast surface and optional stains, a coloured mat, environment light plus a shadow-casting sun in a random direction, random part rotation/offset/distance and 0-10° camera tilt (10-20° for "handheld"); `eval_m0.py` then adds sensor noise, defocus and JPEG. This renderer is deliberately different from the CPU template rasteriser in `cadref.py`, so the test is not circular. 320 photos; full table in `results_m0.txt`.
+
+**Geometry checks (layer A) pass the M0 go/no-go:**
+
+| Group | Correct |
+|---|---|
+| Good parts: clean / stained / handheld | 100% / 100% / 100% PASS |
+| Designed holes flagged on good parts | 0 / 100 |
+| Wrong parts: flange, square plate, 5-blade impeller, upside-down part, handheld 5-blade | 100% WRONG PART in all 5 |
+| Blocked designed hole / chipped rim / extra through-hole | 100% / 100% / 100% |
+| Extra through-hole, handheld 10-20° | 50% (the hole's own wall hides most of a 3-5 mm opening at that tilt) |
+| Blind pits, cracks, broken blade | 0%: not visible to the geometry checks |
+
+About 0.5 s per photo in Python + OpenCV on one core (JS port expected similar or faster).
+
+**Lighting-dependent checks (layers B, C) fail under random directional light.** The raised-feature check (is there an edge where each blade should be?) and the stray-edge check (cracks, pits) reject 85-100% of good parts: a blade wall parallel to the light has no contrast, and cast shadows draw strong edges where the CAD has none. The weakest-chunk statistic overlaps completely between good parts (0.06-0.46) and broken blades (0.10-0.36). One photo under arbitrary lighting cannot separate these, so they stay off.
+
+What we learned along the way:
+- Segmentation must ignore shadows on the mat: scoring each pixel by the mat's own hue relative to lightness (lit and shadowed mat score the same, grey metal ~0) beat plain chroma distance and rg-chromaticity (good IoU min 0.990 vs 0.987 / 0.957).
+- Template views up to 18° tilt are needed for handheld shots; at 20° a 6 mm deep hole looks half blocked unless the template models the wall, which the z-buffer does.
+- The bottom face of this part has the same hole pattern as the top (3-fold symmetry), so "wrong face" is caught by the feature-edge ratio (bottom max 1.33 vs good min 1.57), a thin margin worth watching with real photos.
+
+**Next (M0b):** fine defects need controlled light and/or good photos. Test (1) a ring/dome-light station (shading no longer depends on part rotation) with the CAD-only feature and stray checks, and (2) the surface layer: 5-10 enrolled good photos aligned to the CAD, position-aware comparison.
+
 ## Milestones
 
 | | Deliverable | Go / no-go |
 |---|---|---|
-| M0 | Python prototype: align + wrong-part gate + hole checks on the synthetic benchmark | Wrong-part ≥ 95% caught, designed holes never flagged |
+| M0 | Python prototype: align + wrong-part gate + hole checks on the synthetic benchmark | Wrong-part ≥ 95% caught, designed holes never flagged. **Done: 100% / 0 flagged** |
 | M1 | Browser: CAD import (STL, then STEP), face picker, template rendering, CAD profile saved like tab 2 profiles | Loads the real CAD, renders the right face |
 | M2 | Segmentation, alignment, WRONG PART gate, hole/outline/edge checks, overlay, report + CSV fields | Matches M0 numbers on real photos |
 | M3 | Optional good photos: position-aware surface check; port alignment + position-aware matching into tab 2 | Tab 2 beats current AUROC / false-reject at same shots |

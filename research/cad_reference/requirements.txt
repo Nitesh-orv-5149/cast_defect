@@ -1,0 +1,6 @@
+# research only (M0 prototype); the web app needs none of this
+numpy
+scipy
+opencv-python-headless
+trimesh
+manifold3d

@@ -1,0 +1,76 @@
+Decision statistics per group (min / median / max)
+group                                  n          IoU             feature ratio    weakest chunk rel  longest stray mm (lvl1)
+defect/blind_blowhole                 20  0.990/0.993/0.995     2.33/5.51/17.46    0.07/0.13/0.36     3.7/6.0/24.6          
+defect/blocked_hole                   20  0.989/0.992/0.993     1.68/4.02/10.85    0.07/0.20/0.37     0.4/7.1/19.0          
+defect/broken_blade                   20  0.990/0.994/0.995     1.90/4.76/9.27     0.10/0.16/0.36     0.0/4.7/24.6          
+defect/chipped_rim                    20  0.982/0.984/0.990     2.15/4.93/12.73    0.06/0.16/0.33     2.2/5.8/17.1          
+defect/crack                          20  0.990/0.994/0.995     2.24/4.61/12.98    0.07/0.17/0.35     0.7/4.8/14.5          
+defect/through_blowhole               20  0.990/0.992/0.994     2.48/4.88/9.54     0.10/0.17/0.32     1.9/5.4/22.7          
+good/clean                            60  0.990/0.994/0.996     1.57/4.65/15.14    0.06/0.17/0.46     0.7/5.6/28.3          
+good/stained                          20  0.991/0.994/0.995     2.33/5.34/14.37    0.06/0.15/0.36     0.0/5.0/13.0          
+handheld/defect/through_blowhole      10  0.989/0.991/0.992     2.56/7.01/12.46    0.08/0.14/0.27     3.0/3.9/7.4           
+handheld/good                         20  0.989/0.991/0.994     2.31/6.75/15.96    0.07/0.15/0.32     0.0/0.0/11.5          
+handheld/other/impeller_5_blade       10  0.976/0.978/0.980     1.20/1.53/2.22     0.11/0.37/0.55     10.4/21.0/35.3        
+other/bottom_face                     20  0.990/0.993/0.994     1.18/1.26/1.33     0.45/0.62/0.72     1.9/3.7/15.3          
+other/flange                          20  0.798/0.807/0.816     1.13/1.26/1.39     0.21/0.34/0.48     8.6/14.0/19.7         
+other/impeller_5_blade                20  0.974/0.978/0.980     1.13/1.37/1.65     0.18/0.44/0.66     18.6/30.7/37.2        
+other/square_plate                    20  0.807/0.811/0.812     1.17/1.24/1.34     0.49/0.60/0.69     10.0/18.6/26.4        
+
+A. geometry only (wrong part, holes, outline)
+group                                  n  correct  PASS REJECT WRONG  reasons
+defect/blind_blowhole                 20       0%    20      0     0  
+defect/blocked_hole                   20     100%     0     20     0  {'blocked_hole': 20}
+defect/broken_blade                   20       0%    20      0     0  
+defect/chipped_rim                    20     100%     0     20     0  {'missing_material': 20}
+defect/crack                          20       0%    20      0     0  
+defect/through_blowhole               20     100%     0     20     0  {'unexpected_hole': 20}
+good/clean                            60     100%    60      0     0  
+good/stained                          20     100%    20      0     0  
+handheld/defect/through_blowhole      10      50%     5      5     0  {'unexpected_hole': 5}
+handheld/good                         20     100%    20      0     0  
+handheld/other/impeller_5_blade       10     100%     0      0    10  {'mismatch': 10}
+other/bottom_face                     20     100%     0      0    20  {'mismatch': 20}
+other/flange                          20     100%     0      0    20  {'mismatch': 20}
+other/impeller_5_blade                20     100%     0      0    20  {'mismatch': 20}
+other/square_plate                    20     100%     0      0    20  {'mismatch': 20}
+good parts with a designed hole flagged: 0/100
+
+B. A + raised-feature check
+group                                  n  correct  PASS REJECT WRONG  reasons
+defect/blind_blowhole                 20      95%     1     19     0  {'missing_feature': 19}
+defect/blocked_hole                   20     100%     0     20     0  {'blocked_hole': 20, 'missing_feature': 17}
+defect/broken_blade                   20      90%     2     18     0  {'missing_feature': 18}
+defect/chipped_rim                    20     100%     0     20     0  {'missing_material': 20, 'missing_feature': 17}
+defect/crack                          20      95%     1     19     0  {'missing_feature': 19}
+defect/through_blowhole               20     100%     0     20     0  {'unexpected_hole': 20, 'missing_feature': 18}
+good/clean                            60      13%     8     52     0  {'missing_feature': 52}
+good/stained                          20      15%     3     17     0  {'missing_feature': 17}
+handheld/defect/through_blowhole      10     100%     0     10     0  {'unexpected_hole': 5, 'missing_feature': 10}
+handheld/good                         20       5%     1     19     0  {'missing_feature': 19}
+handheld/other/impeller_5_blade       10     100%     0      0    10  {'mismatch': 10}
+other/bottom_face                     20     100%     0      0    20  {'mismatch': 20}
+other/flange                          20     100%     0      0    20  {'mismatch': 20}
+other/impeller_5_blade                20     100%     0      0    20  {'mismatch': 20}
+other/square_plate                    20     100%     0      0    20  {'mismatch': 20}
+good parts with a designed hole flagged: 0/100
+
+C. B + stray-edge check (cracks, pits)
+group                                  n  correct  PASS REJECT WRONG  reasons
+defect/blind_blowhole                 20     100%     0     20     0  {'missing_feature': 19, 'unexpected_spot': 30, 'unexpected_edge': 14}
+defect/blocked_hole                   20     100%     0     20     0  {'blocked_hole': 20, 'missing_feature': 17, 'unexpected_edge': 16, 'unexpected_spot': 8}
+defect/broken_blade                   20      95%     1     19     0  {'missing_feature': 18, 'unexpected_spot': 9, 'unexpected_edge': 9}
+defect/chipped_rim                    20     100%     0     20     0  {'missing_material': 20, 'missing_feature': 17, 'unexpected_spot': 8, 'unexpected_edge': 17}
+defect/crack                          20      95%     1     19     0  {'missing_feature': 19, 'unexpected_spot': 13, 'unexpected_edge': 15}
+defect/through_blowhole               20     100%     0     20     0  {'unexpected_hole': 20, 'missing_feature': 18, 'unexpected_spot': 18, 'unexpected_edge': 6}
+good/clean                            60       7%     4     56     0  {'missing_feature': 52, 'unexpected_edge': 52, 'unexpected_spot': 24}
+good/stained                          20       0%     0     20     0  {'unexpected_spot': 15, 'missing_feature': 17, 'unexpected_edge': 6}
+handheld/defect/through_blowhole      10     100%     0     10     0  {'unexpected_hole': 5, 'missing_feature': 10, 'unexpected_spot': 9, 'unexpected_edge': 1}
+handheld/good                         20       0%     0     20     0  {'missing_feature': 19, 'unexpected_spot': 5, 'unexpected_edge': 3}
+handheld/other/impeller_5_blade       10     100%     0      0    10  {'mismatch': 10}
+other/bottom_face                     20     100%     0      0    20  {'mismatch': 20}
+other/flange                          20     100%     0      0    20  {'mismatch': 20}
+other/impeller_5_blade                20     100%     0      0    20  {'mismatch': 20}
+other/square_plate                    20     100%     0      0    20  {'mismatch': 20}
+good parts with a designed hole flagged: 0/100
+
+time per photo: median 524 ms, max 1457 ms (Python + OpenCV, 1 core)
