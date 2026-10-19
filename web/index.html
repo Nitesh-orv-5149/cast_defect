@@ -88,6 +88,17 @@
   #thumbs { display:flex; flex-wrap:wrap; gap:6px; } #thumbs img { width:52px; height:52px; border-radius:12px; object-fit:cover; border:1px solid var(--stroke); }
   #sens { display:flex; gap:10px; align-items:center; font-size:12px; color:var(--muted); } #sens input { flex:1; }
   .row { display:flex; gap:10px; flex-wrap:wrap; } .row > * { flex:1 1 140px; white-space:nowrap; }
+  #cadparts { display:flex; flex-wrap:wrap; gap:8px; }
+  #cadnew, #cadform { display:grid; gap:10px; }
+  #cadnew { border-top:1px solid rgba(255,255,255,.08); padding-top:14px; }
+  #cadnew h2 { margin:0; font-size:15px; font-weight:600; } #cadnew p { margin:0; font-size:13px; color:var(--muted); }
+  #cadfaces { display:grid; grid-template-columns:repeat(6, 1fr); gap:8px; }
+  #cadfaces button { padding:6px !important; border-radius:16px !important; display:grid; gap:4px; justify-items:center; font-size:11px; }
+  #cadfaces canvas { width:100%; aspect-ratio:1; display:block; }
+  #cadfaces button.on { border-color:rgba(255,150,165,.6); background:linear-gradient(140deg, rgba(196,58,80,.3), rgba(122,31,43,.1)); }
+  label.num { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13px; color:var(--muted); }
+  label.num input { width:110px; padding:10px 14px; border-radius:999px; border:1px solid var(--stroke); background:rgba(255,255,255,.04); color:var(--fg); text-align:right; }
+  @media (max-width:640px) { #cadfaces { grid-template-columns:repeat(3, 1fr); } }
   .soon { display:flex; gap:14px; align-items:center; }
   .ico { flex:none; width:52px; height:52px; border-radius:16px; display:grid; place-items:center; color:var(--maroon-hi);
     background:rgba(122,31,43,.25); border:1px solid rgba(255,150,165,.25); }
@@ -223,11 +234,21 @@
   </section>
 
   <section id="cadpanel" class="panel glass" hidden>
-    <div class="soon">
-      <span class="ico"><svg viewBox="0 0 24 24"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M12 21.5V12M20.5 7.25L12 12 3.5 7.25"/></svg></span>
-      <div><h2>Reference from a CAD file</h2><p>Upload a STEP or STL of the part to build the reference without photographing good parts. Coming soon.</p></div>
-    </div>
-    <button class="glass" disabled>Upload CAD file</button>
+    <div class="phead"><h2>CAD parts</h2><button id="caddel" class="glass" hidden>Delete</button></div>
+    <div id="cadparts"></div>
+    <section id="cadnew" hidden>
+      <h2>New part from a CAD file</h2>
+      <p>STL or OBJ in millimetres. At inspection, put the part on a plain coloured mat (green or blue) with the whole part in view.</p>
+      <label class="glass">Choose CAD file (.stl, .obj)<input id="cadfile" type="file" accept=".stl,.obj,model/stl" hidden></label>
+      <div id="cadform" hidden>
+        <p id="cadinfo"></p>
+        <h2>Which face does the camera see?</h2>
+        <div id="cadfaces"></div>
+        <input id="cadname" type="text" placeholder="Part name, e.g. Connecting rod A" maxlength="40">
+        <label class="num">Camera height above the table (mm)<input id="cadcam" type="number" min="100" max="3000" step="10" value="320"></label>
+        <div class="row"><button id="cadsave" class="glass primary">Save part</button><button id="cadcancel" class="glass">Cancel</button></div>
+      </div>
+    </section>
   </section>
 
   <div class="stage" id="stage">
@@ -281,6 +302,7 @@ async function init() {
   const load = () => Promise.all([fetch("meta.json").then(r => r.json()), ort.InferenceSession.create("model.onnx", { executionProviders: ["wasm"] })]);
   [meta, session] = await load().catch(() => new Promise(r => setTimeout(r, 1500)).then(load));
   await loadProfiles();
+  await loadCadParts();
   $("status").textContent = "On-device";
 }
 
@@ -361,14 +383,15 @@ async function inspect(src, w, h) {
   const raw = crop(src, w, h, view.width);
   verdict.className = ""; verdict.textContent = "Inspecting…";
   $("stage").classList.add("busy");
-  const r = await (active ? inspectRef(raw, active) : inspectModel(raw)).finally(() => $("stage").classList.remove("busy"));
+  const r = await (tab === "cad" ? inspectCad(raw) : active ? inspectRef(raw, active) : inspectModel(raw)).finally(() => $("stage").classList.remove("busy"));
   const { map, H, W, lo, hi } = r, flagged = r.verdict !== "PASS";
   const t = v => Math.min(1, Math.max(0, (v - lo) / (hi - lo || 1)));
 
   const g = view.getContext("2d");
   g.globalAlpha = 1;
   g.drawImage(raw, 0, 0);
-  if (flagged && hi > lo) {
+  if (r.overlay) g.drawImage(r.overlay, 0, 0);
+  else if (flagged && hi > lo) {
     const hm = document.createElement("canvas"); hm.width = W; hm.height = H;
     const img = hm.getContext("2d").createImageData(W, H);
     map.forEach((v, j) => img.data.set([...jet(t(v)), Math.round(220 * t(v))], 4 * j));
@@ -377,16 +400,19 @@ async function inspect(src, w, h) {
     g.drawImage(hm, 0, 0, view.width, view.height);
   }
 
-  verdict.className = { PASS: "pass", REJECT: "reject", "NO MATCH": "nomatch" }[r.verdict];
+  verdict.className = { PASS: "pass", REJECT: "reject", "NO MATCH": "nomatch", "WRONG PART": "nomatch" }[r.verdict];
   verdict.innerHTML = `${r.verdict}<small>${r.detail}</small>`;
   Object.assign($("viewtag"), { hidden: false, textContent: r.verdict, className: "tag end " + verdict.className });
-  $("viewempty").hidden = true; $("legend").hidden = !flagged; $("stage").classList.add("has-result");
-  // Where the evidence sits (3x3 zone of the hottest cell) and how much of the part it covers
-  let peak = 0; map.forEach((v, j) => { if (v > map[peak]) peak = j; });
-  const zr = Math.floor(Math.floor(peak / W) * 3 / H), zc = Math.floor((peak % W) * 3 / W);
+  $("viewempty").hidden = true; $("legend").hidden = !flagged || !map; $("stage").classList.add("has-result");
+  // Where the evidence sits (3x3 zone of the hottest cell, or of the CAD findings) and how much of the part it covers
+  let zr = 1, zc = 1, coverage = 0;
+  if (map) {
+    let peak = 0; map.forEach((v, j) => { if (v > map[peak]) peak = j; });
+    zr = Math.floor(Math.floor(peak / W) * 3 / H); zc = Math.floor((peak % W) * 3 / W);
+    coverage = hi > lo ? map.filter(v => t(v) > 0.5).length / map.length : 0;
+  } else if (r.centroid) { zc = Math.min(2, Math.floor(r.centroid[0] * 3)); zr = Math.min(2, Math.floor(r.centroid[1] * 3)); }
   const zone = (["Upper", "Middle", "Lower"][zr] + "-" + ["left", "centre", "right"][zc]).replace("Middle-centre", "Centre");
-  const coverage = hi > lo ? map.filter(v => t(v) > 0.5).length / map.length : 0;
-  delete r.map;
+  delete r.map; delete r.overlay;
   log.unshift({ ...r, id: nextId++, time: new Date().toISOString(), zone, coverage,
     img: view.toDataURL("image/png"), raw: raw.toDataURL("image/png") });
   try { localStorage.setItem("reportId", nextId); } catch (e) {}
@@ -399,15 +425,109 @@ async function inspect(src, w, h) {
 const MAX_REF = 20, BANK_CAP = 30000, CHUNK = 6000, CAL_MAX = 5, NO_MATCH = 1.35, DEFAULT_SENS = 1.0;
 let refBackbone, refNN, profiles = [], active = null, enrolImgs = [];
 
+// ---------- CAD mode: compare the photo with the CAD model (outline, designed holes, features; web/cad.js) ----------
+let cadParts = [], cadSel = "", cadProf = null, cadBuilding = null, cadNew = null;
+const loadCadLib = () => window.CAD ? Promise.resolve() : loadScript("cad.js");
+async function loadCadParts(select) {
+  try { cadParts = await store("readonly", s => s.getAll(), "cad"); } catch (e) { cadParts = []; }
+  if (select !== undefined) cadSel = select;
+  if (cadSel !== "__new" && !cadParts.some(p => p.name === cadSel)) cadSel = cadParts[0]?.name ?? "__new";
+  renderCadParts(); setMode();
+}
+function renderCadParts() {
+  $("cadparts").innerHTML = cadParts.map(p => `<button class="chip glass${p.name === cadSel ? " on" : ""}" data-name="${encodeURIComponent(p.name)}">` +
+    `${p.name.replace(/</g, "&lt;")}<small>${p.face} face</small></button>`).join("") +
+    `<button class="chip glass${cadSel === "__new" ? " on" : ""}" data-name="__new">+ New CAD part</button>`;
+}
+// Render the inspection templates for the selected part once, then keep them in memory
+function ensureCadProfile() {
+  const part = cadParts.find(p => p.name === cadSel);
+  if (!part || cadProf?.name === part.name || cadBuilding === part.name) return;
+  cadBuilding = part.name;
+  (async () => {
+    await loadCadLib();
+    const prof = await CAD.buildProfile(CAD.prepare(part.tris, part.face).tris, { camDist: part.camMm, onProgress: async (i, n) => {
+      if (tab === "cad" && cadSel === part.name) { verdict.className = ""; verdict.textContent = `Preparing “${part.name}” from its CAD: view ${i} of ${n}…`; }
+      await new Promise(r => setTimeout(r));
+    } });
+    prof.name = part.name;
+    if (cadBuilding === part.name) { cadProf = prof; cadBuilding = null; }
+    setMode();
+  })().catch(err => { console.error(err); cadBuilding = null; verdict.textContent = "Could not prepare the CAD part: " + err.message; });
+}
+$("cadparts").onclick = e => {
+  const b = e.target.closest("[data-name]"); if (!b) return;
+  cadSel = decodeURIComponent(b.dataset.name);
+  if (cadSel === "__new") { cadNew = null; $("cadform").hidden = true; $("cadfile").value = ""; }
+  renderCadParts(); setMode();
+};
+$("cadfile").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    await loadCadLib();
+    const tris = CAD.loadCAD(f.name, await f.arrayBuffer());
+    cadNew = { tris, face: "top", file: f.name };
+    const sz = CAD.prepare(tris, "top").size;
+    $("cadinfo").textContent = `${f.name}: ${(tris.length / 9).toLocaleString()} triangles, ${sz.map(v => v.toFixed(0)).join(" × ")} mm`;
+    $("cadname").value = f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").slice(0, 40);
+    $("cadfaces").innerHTML = CAD.FACES.map(face => `<button class="glass${face === "top" ? " on" : ""}" data-face="${face}"><canvas width="96" height="96"></canvas>${face}</button>`).join("");
+    for (const b of $("cadfaces").querySelectorAll("button")) {
+      const c = b.querySelector("canvas"), img = new ImageData(CAD.preview(tris, b.dataset.face, 96), 96, 96);
+      c.getContext("2d").putImageData(img, 0, 0);
+    }
+    $("cadform").hidden = false;
+  } catch (err) { console.error(err); alert("Could not read the CAD file: " + err.message); }
+};
+$("cadfaces").onclick = e => {
+  const b = e.target.closest("[data-face]"); if (!b || !cadNew) return;
+  cadNew.face = b.dataset.face;
+  for (const x of $("cadfaces").querySelectorAll("button")) x.classList.toggle("on", x === b);
+};
+$("cadsave").onclick = async () => {
+  const name = $("cadname").value.trim(), camMm = +$("cadcam").value;
+  if (!cadNew || !name) return alert("Choose a CAD file and give the part a name.");
+  if (!(camMm >= 100)) return alert("Enter the camera height in millimetres (distance from the lens to the table).");
+  await store("readwrite", s => s.put({ name, face: cadNew.face, camMm, tris: cadNew.tris, file: cadNew.file, created: new Date().toISOString() }), "cad");
+  cadNew = null; $("cadform").hidden = true; $("cadfile").value = "";
+  await loadCadParts(name);
+};
+$("cadcancel").onclick = () => {
+  cadNew = null; $("cadform").hidden = true; $("cadfile").value = "";
+  if (!cadParts.length) return setTab("model");
+  cadSel = cadParts[0].name; renderCadParts(); setMode();
+};
+$("caddel").onclick = async () => {
+  if (!cadSel || cadSel === "__new" || !confirm(`Delete the CAD part “${cadSel}”?`)) return;
+  await store("readwrite", s => s.delete(cadSel), "cad");
+  if (cadProf?.name === cadSel) cadProf = null;
+  await loadCadParts();
+};
+async function inspectCad(raw) {
+  await new Promise(r => setTimeout(r, 40));  // let the scan line paint before the CPU work
+  const S = raw.width, px = raw.getContext("2d").getImageData(0, 0, S, S).data;
+  const st = CAD.measure(cadProf, px, S, S), d = CAD.decide(st), part = cadProf.name;
+  if (st.noPart) return { mode: "cad", part, verdict: "NO MATCH", findings: [], pDefect: 1,
+    detail: "No part found: use a plain coloured mat (green or blue) and keep the whole part in view" };
+  const ov = CAD.overlay(cadProf, st, d.mask, S, S), c = document.createElement("canvas");
+  c.width = c.height = S; c.getContext("2d").putImageData(new ImageData(ov.rgba, S, S), 0, 0);
+  const detail = d.verdict === "PASS" ? "Matches the CAD: outline and designed holes as expected · red = CAD edges, blue = designed holes"
+    : d.verdict === "WRONG PART" ? `Doesn’t match “${part}”: ${d.findings[0].text}. Check the part type and the face shown to the camera.`
+    : d.findings.map(f => f.text).join(" · ");
+  return { mode: "cad", part, verdict: d.verdict, detail, findings: d.findings, overlay: c, centroid: ov.centroid,
+    iou: st.iou, featureRatio: st.featureRatio, pDefect: d.verdict === "PASS" ? 0 : 1 };
+}
+
 const idb = () => new Promise((ok, no) => {
-  const r = indexedDB.open("cast-inspector", 1);
-  r.onupgradeneeded = () => r.result.createObjectStore("profiles", { keyPath: "name" });
+  const r = indexedDB.open("cast-inspector", 2);
+  r.onupgradeneeded = () => {
+    for (const name of ["profiles", "cad"]) if (!r.result.objectStoreNames.contains(name)) r.result.createObjectStore(name, { keyPath: "name" });
+  };
   r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
 });
-async function store(mode, fn) {
+async function store(mode, fn, name = "profiles") {
   const d = await idb();
   return new Promise((ok, no) => {
-    const t = d.transaction("profiles", mode), req = fn(t.objectStore("profiles"));
+    const t = d.transaction(name, mode), req = fn(t.objectStore(name));
     t.oncomplete = () => ok(req.result); t.onerror = () => no(t.error);
   });
 }
@@ -504,7 +624,7 @@ function addGood(c) { if (enrolImgs.length < MAX_REF) enrolImgs.push(c); renderE
 // In "ref", sel is the chosen part type name or "__new" while enrolling.
 let tab = "model", sel = "";
 const SUBS = { model: "Pre-trained pump impeller classifier · Grad-CAM explanations",
-  ref: "Compare against your own good parts · no training needed", cad: "Build the reference from a CAD model" };
+  ref: "Compare against your own good parts · no training needed", cad: "Compare against the CAD model: outline, designed holes, wrong parts" };
 async function loadProfiles(select) {
   try { profiles = await store("readonly", s => s.getAll()); } catch (e) { profiles = []; }
   if (select !== undefined) sel = select;
@@ -522,12 +642,16 @@ function setMode() {
   active = ref && !enrolling ? profiles.find(p => p.name === sel) ?? null : null;
   $("delprof").hidden = $("sens").hidden = !active;
   if (active) $("sensr").value = active.sens;
-  $("viewcap").textContent = active ? "Difference map" : "Grad-CAM";
+  const cad = tab === "cad", cadNewPart = cad && cadSel === "__new", cadReady = cad && cadProf?.name === cadSel;
+  $("cadnew").hidden = !cadNewPart; $("caddel").hidden = !cad || cadNewPart || !cadSel;
+  if (cad && !cadNewPart && !cadReady) ensureCadProfile();
+  $("viewcap").textContent = cad ? "CAD overlay" : active ? "Difference map" : "Grad-CAM";
   $("sub").textContent = SUBS[tab];
-  btn.disabled = enrolling || tab === "cad" || !session;
+  btn.disabled = enrolling || !session || (cad && !cadReady);
   verdict.className = "";
   if (enrolling) { renderEnrol(); verdict.textContent = "Show good parts to create the reference"; }
-  else if (tab === "cad") verdict.textContent = "CAD references are coming soon";
+  else if (cadNewPart) verdict.textContent = "Choose a CAD file to create the reference";
+  else if (cad) verdict.textContent = cadReady ? `Ready: inspecting “${cadSel}” against its CAD` : `Preparing “${cadSel}” from its CAD…`;
   else if (session) verdict.textContent = active ? `Ready: inspecting “${active.name}”` : "Ready: place part under camera";
 }
 const TABS = ["model", "ref", "cad"], navBtns = [...$("nav").querySelectorAll(":scope > [data-tab]")];
@@ -640,23 +764,26 @@ function renderHistory() {
     const thumb = `<img src="${e.img}" alt="">`;
     return `<li>${e.verdict !== "PASS" ? `<a href="${e.img}" download="flagged_${e.time.replace(/[:.]/g, "-")}.png" title="Save overlay">${thumb}</a>` : thumb}
       <span class="${{ PASS: "p", REJECT: "r", "NO MATCH": "n" }[e.verdict]}">${e.verdict}</span>
-      <span class="m">${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : `p(defect) ${e.pDefect.toFixed(3)}`}<small>${new Date(e.time).toLocaleTimeString()}</small></span>
+      <span class="m">${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : e.mode === "cad" ? `${e.part.replace(/</g, "&lt;")} · CAD` : `p(defect) ${e.pDefect.toFixed(3)}`}<small>${new Date(e.time).toLocaleTimeString()}</small></span>
       <button class="glass" data-i="${i}">PDF</button></li>`;
   }).join("");
 }
 
 // Self-contained HTML report (images embedded as data URLs). Open it and Print -> Save as PDF.
 function reportHtml(e) {
-  const reject = e.verdict === "REJECT", nomatch = e.verdict === "NO MATCH", flagged = reject || nomatch, ref = e.mode === "ref";
+  const reject = e.verdict === "REJECT", nomatch = e.verdict === "NO MATCH" || e.verdict === "WRONG PART", flagged = reject || nomatch;
+  const ref = e.mode === "ref", cad = e.mode === "cad", esc = v => String(v).replace(/</g, "&lt;");
   const conf = reject ? e.pDefect : 1 - e.pDefect;
   const id = "PART-" + String(e.id).padStart(5, "0"), doc = "QC-" + e.time.slice(0, 10).replace(/-/g, "") + "-" + String(e.id).padStart(5, "0");
   const when = new Date(e.time), pct = v => (v * 100).toFixed(1) + "%";
   const accent = reject ? "#c4302b" : nomatch ? "#b26a00" : "#17864a", tint = reject ? "#fdf1f0" : nomatch ? "#fff6e8" : "#eef8f2";
   const action = reject
     ? "Quarantine this part. Verify the highlighted zone by eye or with dye-penetrant before scrapping or rework."
-    : nomatch ? `The image does not resemble the enrolled “${e.profile}” parts. Check the part type, framing and lighting, then re-inspect.`
+    : nomatch ? (cad ? `This is not the part in the CAD “${esc(e.part)}” (or not the face it was set up for). Check the part type and which side faces the camera, then re-inspect.`
+      : `The image does not resemble the enrolled “${e.profile}” parts. Check the part type, framing and lighting, then re-inspect.`)
     : "Release the part to the next operation. No defect evidence above the decision threshold.";
-  const scoreTxt = ref ? `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}` : `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
+  const scoreTxt = cad ? (e.findings.length ? e.findings.map(f => esc(f.text)).join(" · ") : "outline and designed holes match the CAD") + (e.iou ? ` · outline match ${(e.iou * 100).toFixed(1)}%` : "")
+    : ref ? `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}` : `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
   const jetBar = "linear-gradient(90deg,#00007f,#0000ff,#00ffff,#7fff7f,#ffff00,#ff0000,#7f0000)";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Inspection report ${id}</title>
@@ -723,26 +850,27 @@ function reportHtml(e) {
     <div>
       <h2>${reject ? "Defect detected: part rejected" : nomatch ? "Part does not match the reference: re-inspect" : "No defect detected: part accepted"}</h2>
       <p>${scoreTxt}</p>
-      <div class="gauge"><i></i></div>
-      <div class="gauge-l"><span>Accept</span><span>Threshold${ref ? "" : " " + THRESHOLD}</span><span>Reject</span></div>
+      ${cad ? "" : `<div class="gauge"><i></i></div>
+      <div class="gauge-l"><span>Accept</span><span>Threshold${ref ? "" : " " + THRESHOLD}</span><span>Reject</span></div>`}
     </div>
   </section>
 
   <h3>Summary</h3>
   <div class="kpis">
-    <div><small>Part ID</small><b>${id}</b>${ref ? `<br><span style="color:var(--sub)">${e.profile.replace(/</g, "&lt;")}</span>` : ""}</div>
+    <div><small>Part ID</small><b>${id}</b>${ref || cad ? `<br><span style="color:var(--sub)">${esc(ref ? e.profile : e.part)}</span>` : ""}</div>
     <div><small>Inspected</small><b>${when.toLocaleDateString()}</b><br><span style="color:var(--sub)">${when.toLocaleTimeString()}</span></div>
-    <div><small>${ref ? "Score / threshold" : "Confidence"}</small><b>${ref ? (e.score / e.thr).toFixed(2) + "×" : pct(conf)}</b></div>
-    <div><small>${flagged ? "Evidence zone" : "Evidence"}</small><b>${flagged ? e.zone : "None"}</b>${flagged ? `<br><span style="color:var(--sub)">${pct(e.coverage)} of surface</span>` : ""}</div>
+    <div><small>${cad ? "Outline match" : ref ? "Score / threshold" : "Confidence"}</small><b>${cad ? (e.iou ? (e.iou * 100).toFixed(1) + "%" : "–") : ref ? (e.score / e.thr).toFixed(2) + "×" : pct(conf)}</b></div>
+    <div><small>${flagged ? "Evidence zone" : "Evidence"}</small><b>${flagged ? (cad && nomatch ? "Whole part" : e.zone) : "None"}</b>${flagged && !cad ? `<br><span style="color:var(--sub)">${pct(e.coverage)} of surface</span>` : ""}</div>
   </div>
 
   <h3>Visual evidence</h3>
   <div class="imgs">
     <figure><img src="${e.raw}" alt="Captured part">
       <figcaption><b>Captured image</b>Centre-cropped frame as seen by the model</figcaption></figure>
-    <figure>${flagged ? `<img src="${e.img}" alt="Heatmap overlay">` : `<div class="none"><b>✓ Clean</b>No region exceeded the defect threshold, so no heatmap is drawn.</div>`}
-      <figcaption><b>${ref ? "Difference from good parts" : "Grad-CAM explanation"}</b>${flagged ? `${ref ? "Highlighted areas look unlike any enrolled good part" : "Highlighted areas drove the defect decision"}
-        <div class="legend">Low<span></span>High ${ref ? "difference" : "influence"}</div>` : "Heatmap shown only for flagged parts"}</figcaption></figure>
+    <figure>${flagged || cad ? `<img src="${e.img}" alt="${cad ? "CAD overlay" : "Heatmap overlay"}">` : `<div class="none"><b>✓ Clean</b>No region exceeded the defect threshold, so no heatmap is drawn.</div>`}
+      <figcaption>${cad ? `<b>CAD overlay</b>Red lines: CAD edges after aligning the photo to the CAD. Blue: designed through-holes. Filled red: findings.`
+        : `<b>${ref ? "Difference from good parts" : "Grad-CAM explanation"}</b>${flagged ? `${ref ? "Highlighted areas look unlike any enrolled good part" : "Highlighted areas drove the defect decision"}
+        <div class="legend">Low<span></span>High ${ref ? "difference" : "influence"}</div>` : "Heatmap shown only for flagged parts"}`}</figcaption></figure>
   </div>
 
   <h3>Recommended action</h3>
@@ -750,7 +878,10 @@ function reportHtml(e) {
 
   <h3>Inspection parameters</h3>
   <table>
-    ${ref ? `<tr><td>Decision rule</td><td>REJECT if anomaly score &gt; ${e.thr.toFixed(2)} (set from the variation between enrolled good parts); NO MATCH when the typical patch difference exceeds ${NO_MATCH}× that of good parts</td></tr>
+    ${cad ? `<tr><td>Decision rule</td><td>WRONG PART if the aligned outline matches the CAD less than 90%, the feature edges don't line up, or the hole pattern differs; REJECT if a designed hole is blocked, an opening ≥ 2 mm² appears where the CAD has none, or material ≥ 6 mm² is missing or extra beyond a 1 mm band</td></tr>
+    <tr><td>Method</td><td>Photo aligned to perspective views rendered from the CAD of “${esc(e.part)}”; segmentation on a coloured mat; no training and no good-part photos</td></tr>
+    <tr><td>Limits</td><td>Checks what the outline and through-holes show. Surface defects (cracks, porosity) and changes to raised interior features are not judged in this mode.</td></tr>`
+    : ref ? `<tr><td>Decision rule</td><td>REJECT if anomaly score &gt; ${e.thr.toFixed(2)} (set from the variation between enrolled good parts); NO MATCH when the typical patch difference exceeds ${NO_MATCH}× that of good parts</td></tr>
     <tr><td>Method</td><td>Reference comparison against ${e.refCount} enrolled good part${e.refCount > 1 ? "s" : ""} of “${e.profile.replace(/</g, "&lt;")}”: ImageNet ResNet18 patch features, no defect training</td></tr>
     <tr><td>Explainability</td><td>Distance of each image patch to the most similar good-part patch (28×28 grid, upsampled)</td></tr>`
     : `<tr><td>Decision rule</td><td>REJECT if p(defect) &gt; ${THRESHOLD}</td></tr>
@@ -829,9 +960,10 @@ $("file").onchange = e => {
 };
 $("export").onclick = () => {
   const q = s => `"${String(s ?? "").replace(/"/g, '""')}"`;
-  const csv = "time,part_type,verdict,p_defect,anomaly_score,threshold\n" + log.map(e =>
-    [e.time, q(e.mode === "ref" ? e.profile : "Pump impeller (pre-trained)"), e.verdict,
-     e.mode === "ref" ? "" : e.pDefect.toFixed(4), e.score?.toFixed(4) ?? "", e.thr?.toFixed(4) ?? ""].join(",")).join("\n");
+  const csv = "time,part_type,verdict,p_defect,anomaly_score,threshold,findings\n" + log.map(e =>
+    [e.time, q(e.mode === "ref" ? e.profile : e.mode === "cad" ? e.part + " (CAD)" : "Pump impeller (pre-trained)"), e.verdict,
+     e.mode === "model" ? e.pDefect.toFixed(4) : "", e.score?.toFixed(4) ?? "", e.thr?.toFixed(4) ?? "",
+     q((e.findings || []).map(f => f.text).join("; "))].join(",")).join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   a.download = "inspection_log.csv"; a.click();

@@ -1,6 +1,6 @@
 // Offline support. The page is network-first so a new deploy shows on the next load (cached copy when offline);
 // everything else (model, onnxruntime CDN files) is stale-while-revalidate, cached as first fetched.
-const CACHE = "cast-inspector-v8";
+const CACHE = "cast-inspector-v9";
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(["./", "meta.json", "model.onnx", "manifest.json"])));
