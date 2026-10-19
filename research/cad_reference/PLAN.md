@@ -8,7 +8,7 @@ Branch: `feature/cad-reference`. Status: plan, nothing built yet.
 2. **Designed holes are not defects.** A hole that is in the CAD is expected. A hole that is *not* in the CAD (blowhole) is a defect, and a CAD hole that is *missing or blocked* in the part is a defect too.
 3. **Find defects** on parts that do match.
 
-Constraint kept from the current app: everything runs on the phone/browser, no server, no training.
+Constraints: **no GPU anywhere** (decided). Inspection runs on the phone's CPU; once-per-part jobs may run on Vercel's CPU. No training.
 
 ## What exists (research summary)
 
@@ -116,9 +116,25 @@ Vercel Functions are CPU-only (no GPU), with a small request body limit, so the 
 | STEP/IGES conversion and template rendering | Vercel Function, once per part | Phones download a small precomputed profile instead of the OpenCascade wasm |
 | Inspection log (verdicts, reports) | Vercel Function + database | Central history instead of per-phone CSV |
 | Heavier CPU models (e.g. DINOv2-small surface check) | Vercel Function, only if the offline eval shows a clear win | A trade of latency for accuracy |
-| GPU pose models (FoundationPose / GigaPose) | Not Vercel; a GPU host (Modal, Replicate, RunPod, HF endpoints) behind a Vercel function | Only if handheld inspection is required; adds per-call cost, latency and a network dependency |
+| GPU pose models (FoundationPose / GigaPose) | **Rejected: no GPU** | Handheld is handled within limits on CPU instead (below) |
 
 Large uploads (CAD files, photos) go straight to Blob with client uploads rather than through a function body.
+
+## CPU budget (estimates, to be measured in M0/M2)
+
+| Stage | Where | Estimate |
+|---|---|---|
+| Segment (threshold, 448 px) | Phone | < 10 ms |
+| Coarse align (~360 templates × ~300 contour points vs one distance transform) | Phone | ~5-20 ms |
+| ICP refine (20 iterations) | Phone | ~5 ms |
+| Hole / outline / edge checks | Phone | ~10 ms |
+| Surface check (current ResNet18, local-neighbourhood matching) | Phone | ~200-400 ms |
+| STEP/IGES to mesh | Vercel CPU, once per part | seconds |
+| Template rendering | Vercel CPU or phone, once per part | ~1-3 s |
+
+**Templates are rendered by a small CPU rasteriser** (triangle z-buffer producing silhouette, through-hole mask, depth, normals and crease edges). No shading is needed, so no GPU or WebGL is required, and the same code runs on Vercel, on the phone, and in the Python prototype for parity tests.
+
+**Handheld without a GPU:** fixed station or jig is fully supported; handheld within about ±20° tilt is supported via extra tilt templates and a homography (perspective) step in ICP; steeper angles or cluttered backgrounds are refused with "hold the camera more top-down" rather than guessed.
 
 ## How we'll know it works (before building UI)
 
@@ -144,7 +160,7 @@ Same approach as `research/reference_anomaly/`: prototype in Python (trimesh + p
 2. **Camera setup.** Fixed top-down station with a plain background, or handheld? (Handheld means more tilt and a weaker silhouette.)
 3. **Faces.** One face per part type, or several faces (flip the part and inspect the back)?
 4. **Tolerance.** What size of deviation counts as a defect (for example a hole bigger than 1 mm)? The CAD gives us mm, so we can use real units.
-5. **Server.** Strictly on-device? If a server is ever OK, FoundationPose/GigaPose-class pose estimation becomes an option for handheld use.
+5. ~~Server.~~ Decided: no GPU; phone CPU for inspection, Vercel CPU for once-per-part jobs and sharing.
 
 ## Sources
 
