@@ -32,30 +32,34 @@
   .bg i:nth-child(3) { width:560px; height:400px; left:20%; bottom:-220px; background:#5a1522; opacity:.5; }
 
   /* Liquid glass */
-  .glass, #verdict { position:relative; isolation:isolate; border:1px solid var(--stroke);
-    background:linear-gradient(140deg, rgba(255,255,255,.11), rgba(255,255,255,.03) 55%, rgba(255,255,255,.06));
-    -webkit-backdrop-filter:blur(22px) saturate(180%); backdrop-filter:blur(22px) saturate(180%);
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.28), inset 0 -1px 0 rgba(255,255,255,.05), inset 0 0 24px rgba(255,255,255,.04), 0 12px 32px rgba(0,0,0,.38); }
+  .glass, #verdict { position:relative; isolation:isolate; border:1px solid rgba(255,255,255,.1);
+    background:linear-gradient(140deg, rgba(255,255,255,.05), rgba(255,255,255,.008) 50%, rgba(255,255,255,.03));
+    -webkit-backdrop-filter:blur(7px) saturate(135%); backdrop-filter:blur(7px) saturate(135%);
+    box-shadow:inset 1.5px 1.5px 0 -.5px rgba(255,255,255,.42), inset -1px -1px 0 -.5px rgba(255,255,255,.16),
+      inset 0 0 18px rgba(255,255,255,.035), 0 10px 28px rgba(0,0,0,.28); }
   .glass::before, #verdict::before { content:""; position:absolute; inset:0; z-index:-1; border-radius:inherit; pointer-events:none;
-    background:radial-gradient(120% 70% at 30% -10%, rgba(255,255,255,.22), transparent 55%); }
+    background:radial-gradient(90% 60% at 25% -15%, rgba(255,255,255,.16), transparent 60%),
+      radial-gradient(70% 45% at 80% 120%, rgba(255,255,255,.07), transparent 65%); }
   button.glass, label.glass { border-radius:999px; padding:13px 20px; font-weight:500; cursor:pointer; text-align:center;
     transition:transform .15s, background .2s, box-shadow .2s, opacity .2s; -webkit-tap-highlight-color:transparent; }
-  button.glass:hover:not(:disabled), label.glass:hover { background:linear-gradient(140deg, rgba(255,255,255,.17), rgba(255,255,255,.06) 55%, rgba(255,255,255,.1)); }
+  button.glass:hover:not(:disabled), label.glass:hover { background:linear-gradient(140deg, rgba(255,255,255,.1), rgba(255,255,255,.025) 50%, rgba(255,255,255,.06)); }
   button.glass:active:not(:disabled), label.glass:active { transform:scale(.97); }
   button:disabled { opacity:.42; cursor:not-allowed; }
   button:focus-visible, label.glass:focus-within, input:focus-visible { outline:2px solid var(--maroon-hi); outline-offset:2px; }
-  .primary { border-color:rgba(255,150,165,.38); font-weight:600;
-    background:linear-gradient(140deg, rgba(196,58,80,.6), rgba(122,31,43,.45) 55%, rgba(163,41,59,.55)) !important;
-    box-shadow:inset 0 1px 0 rgba(255,210,218,.45), inset 0 -1px 0 rgba(0,0,0,.2), 0 14px 40px rgba(122,31,43,.55); }
+  .primary { border-color:rgba(255,150,165,.28); font-weight:600;
+    background:linear-gradient(140deg, rgba(196,58,80,.34), rgba(122,31,43,.14) 50%, rgba(163,41,59,.26)) !important;
+    box-shadow:inset 1.5px 1.5px 0 -.5px rgba(255,215,222,.5), inset -1px -1px 0 -.5px rgba(255,180,190,.22), 0 12px 36px rgba(122,31,43,.4); }
 
   /* Floating navbar */
   .navbar { position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:50; display:flex; gap:2px; padding:6px; border-radius:999px; }
   .navbar button { position:relative; z-index:1; display:flex; align-items:center; gap:8px; padding:10px 18px; border:0; border-radius:999px;
     background:none; color:var(--muted); font-size:14px; font-weight:500; white-space:nowrap; cursor:pointer; transition:color .2s; }
-  .navbar button:hover, .navbar button.on { color:#fff; }
-  #navpill { position:absolute; top:6px; bottom:6px; left:6px; border-radius:999px; border:1px solid rgba(255,150,165,.35);
-    background:linear-gradient(140deg, rgba(196,58,80,.55), rgba(122,31,43,.4)); box-shadow:inset 0 1px 0 rgba(255,210,218,.4), 0 6px 18px rgba(122,31,43,.5);
-    transition:left .4s cubic-bezier(.3,1.3,.5,1), width .4s cubic-bezier(.3,1.3,.5,1); }
+  .navbar > button:hover { color:#d9cdd0; }
+  #navpill { position:absolute; top:6px; bottom:6px; left:6px; z-index:2; overflow:hidden; border-radius:999px; pointer-events:none;
+    background:linear-gradient(140deg, rgba(196,58,80,.32), rgba(122,31,43,.1) 55%, rgba(163,41,59,.22));
+    box-shadow:inset 1.5px 1.5px 0 -.5px rgba(255,215,222,.55), inset -1px -1px 0 -.5px rgba(255,180,190,.25), inset 0 0 12px rgba(255,160,175,.12), 0 6px 18px rgba(122,31,43,.35); }
+  .navtrack { position:absolute; top:0; bottom:0; display:flex; gap:2px; }
+  .navtrack button { color:#fff; text-shadow:0 0 12px rgba(255,170,185,.45); }
   .navbar .s { display:none; }
 
   main { max-width:880px; margin:auto; padding:92px 16px 32px; }
@@ -73,7 +77,7 @@
   #parts { display:flex; flex-wrap:wrap; gap:8px; }
   .chip { padding:8px 16px !important; font-size:14px; }
   .chip small { color:var(--muted); margin-left:8px; font-size:12px; }
-  .chip.on { border-color:rgba(255,150,165,.4); background:linear-gradient(140deg, rgba(196,58,80,.5), rgba(122,31,43,.35)); }
+  .chip.on { border-color:rgba(255,150,165,.32); background:linear-gradient(140deg, rgba(196,58,80,.3), rgba(122,31,43,.12)); }
   .chip.on small { color:#f3c4cc; }
   #enrol { display:grid; gap:10px; border-top:1px solid rgba(255,255,255,.08); padding-top:14px; }
   #enrol p, .panel > p { margin:0; font-size:13px; color:var(--muted); }
@@ -141,9 +145,9 @@
   #verdict { margin:16px 0 12px; padding:20px; border-radius:28px; font-size:30px; font-weight:700; letter-spacing:.06em; text-align:center; transition:background .3s, border-color .3s; }
   #verdict small { display:block; font-size:13px; font-weight:400; letter-spacing:0; color:rgba(255,255,255,.75); }
   #verdict:not(.pass):not(.reject):not(.nomatch) { font-size:16px; font-weight:500; letter-spacing:0; color:var(--muted); }
-  #verdict.pass { background:linear-gradient(140deg, rgba(47,191,113,.45), rgba(20,90,52,.35)); border-color:rgba(127,240,176,.4); }
-  #verdict.reject { background:linear-gradient(140deg, rgba(255,77,94,.5), rgba(140,24,40,.42)); border-color:rgba(255,150,160,.45); }
-  #verdict.nomatch { background:linear-gradient(140deg, rgba(255,179,71,.42), rgba(130,80,10,.35)); border-color:rgba(255,210,150,.45); }
+  #verdict.pass { background:linear-gradient(140deg, rgba(47,191,113,.32), rgba(20,90,52,.14)); border-color:rgba(127,240,176,.4); }
+  #verdict.reject { background:linear-gradient(140deg, rgba(255,77,94,.36), rgba(140,24,40,.16)); border-color:rgba(255,150,160,.45); }
+  #verdict.nomatch { background:linear-gradient(140deg, rgba(255,179,71,.3), rgba(130,80,10,.14)); border-color:rgba(255,210,150,.45); }
   .actions { margin-bottom:12px; }
   #inspect { width:100%; padding:18px; font-size:18px; font-weight:700; letter-spacing:.14em; -webkit-backdrop-filter:blur(28px) saturate(200%); backdrop-filter:blur(28px) saturate(200%); }
   #inspect:disabled { opacity:1; color:rgba(255,255,255,.4); filter:saturate(.35); }
@@ -189,7 +193,7 @@
 </div>
 <nav id="nav" class="navbar glass" aria-label="Inspection mode">
   <span id="navpill"></span>
-  <button data-tab="model" class="on"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg><span class="l">Base model</span><span class="s">Model</span></button>
+  <button data-tab="model" class="on" aria-current="true"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg><span class="l">Base model</span><span class="s">Model</span></button>
   <button data-tab="ref"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 8"/></svg><span class="l">Reference images</span><span class="s">Images</span></button>
   <button data-tab="cad"><svg viewBox="0 0 24 24"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M12 21.5V12M20.5 7.25L12 12 3.5 7.25"/></svg><span class="l">Reference CAD</span><span class="s">CAD</span></button>
 </nav>
@@ -526,16 +530,50 @@ function setMode() {
   else if (tab === "cad") verdict.textContent = "CAD references are coming soon";
   else if (session) verdict.textContent = active ? `Ready: inspecting “${active.name}”` : "Ready: place part under camera";
 }
+const TABS = ["model", "ref", "cad"], navBtns = [...$("nav").querySelectorAll(":scope > [data-tab]")];
+const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+// White copy of the tab labels inside the pill, offset so it lines up with the real labels underneath
+const navTrack = document.createElement("div");
+navTrack.className = "navtrack";
+navBtns.forEach(b => { const c = b.cloneNode(true); c.removeAttribute("data-tab"); c.tabIndex = -1; navTrack.append(c); });
+$("navpill").append(navTrack);
+
 function setTab(t) {
+  if (t === tab) return;
+  const dir = Math.sign(TABS.indexOf(t) - TABS.indexOf(tab)), main = document.querySelector("main");
+  const before = new Map([...main.children].filter(el => !el.hidden).map(el => [el, el.getBoundingClientRect().top]));
   tab = t;
-  document.querySelectorAll("#nav [data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  navBtns.forEach(b => { b.classList.toggle("on", b.dataset.tab === t); b.setAttribute("aria-current", b.dataset.tab === t); });
   movePill(); setMode();
+  if (calm()) return;
+  // Content flows: blocks that stay slide to their new place, new ones and changed text blur in from the travel direction
+  const ease = "cubic-bezier(.2,.9,.25,1)";
+  for (const el of main.children) {
+    if (el.hidden) continue;
+    const top = before.get(el);
+    if (top === undefined) el.animate([{ opacity: 0, filter: "blur(12px)", transform: `translateX(${dir * 40}px) scale(.97)` }, { opacity: 1, filter: "blur(0)", transform: "none" }], { duration: 560, easing: ease });
+    else if (Math.abs(top - el.getBoundingClientRect().top) > 1) el.animate([{ transform: `translateY(${top - el.getBoundingClientRect().top}px)` }, { transform: "none" }], { duration: 560, easing: ease });
+  }
+  for (const el of [$("sub"), $("viewcap"), verdict])
+    el.animate([{ opacity: 0, filter: "blur(8px)", transform: `translateX(${dir * 18}px)` }, { opacity: 1, filter: "blur(0)", transform: "none" }], { duration: 480, easing: ease });
 }
+
+// Pill moves like a drop of liquid: the leading edge shoots ahead, the trailing edge catches up
+let pillAt = null;
 function movePill() {
-  const b = $("nav").querySelector(".on");
-  Object.assign($("navpill").style, { left: b.offsetLeft + "px", width: b.offsetWidth + "px" });
+  const b = navBtns.find(x => x.classList.contains("on")), to = [b.offsetLeft, b.offsetWidth], from = pillAt ?? to, x0 = navBtns[0].offsetLeft;
+  const box = ([l, w]) => ({ left: l + "px", width: w + "px" }), track = ([l]) => ({ left: x0 - l + "px" });
+  pillAt = to;
+  Object.assign($("navpill").style, box(to)); Object.assign(navTrack.style, track(to));
+  if (from[0] === to[0] || calm()) return;
+  const fwd = to[0] > from[0], lerp = (a, b, k) => a + (b - a) * k;
+  const L = lerp(from[0], to[0], fwd ? .15 : .85), R = lerp(from[0] + from[1], to[0] + to[1], fwd ? .85 : .15), mid = [L, R - L];
+  const opts = { duration: 620, easing: "cubic-bezier(.3,.8,.25,1)" };
+  $("navpill").animate([box(from), { ...box(mid), offset: .45 }, box(to)], opts);
+  navTrack.animate([track(from), { ...track(mid), offset: .45 }, track(to)], opts);
 }
-movePill(); document.fonts?.ready.then(movePill); addEventListener("resize", movePill);
+const snapPill = () => { pillAt = null; movePill(); };
+snapPill(); document.fonts?.ready.then(snapPill); addEventListener("resize", snapPill);
 
 $("nav").onclick = e => { const b = e.target.closest("[data-tab]"); if (b) setTab(b.dataset.tab); };
 $("parts").onclick = e => {
