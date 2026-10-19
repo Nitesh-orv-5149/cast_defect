@@ -33,8 +33,8 @@
 
   /* Liquid glass */
   .glass, #verdict { position:relative; isolation:isolate; border:1px solid rgba(255,255,255,.1);
-    background:linear-gradient(140deg, rgba(255,255,255,.05), rgba(255,255,255,.008) 50%, rgba(255,255,255,.03));
-    -webkit-backdrop-filter:blur(7px) saturate(135%); backdrop-filter:blur(7px) saturate(135%);
+    background:linear-gradient(140deg, rgba(255,255,255,.028), rgba(255,255,255,0) 50%, rgba(255,255,255,.016));
+    -webkit-backdrop-filter:blur(3.5px) saturate(125%); backdrop-filter:blur(3.5px) saturate(125%);
     box-shadow:inset 1.5px 1.5px 0 -.5px rgba(255,255,255,.42), inset -1px -1px 0 -.5px rgba(255,255,255,.16),
       inset 0 0 18px rgba(255,255,255,.035), 0 10px 28px rgba(0,0,0,.28); }
   .glass::before, #verdict::before { content:""; position:absolute; inset:0; z-index:-1; border-radius:inherit; pointer-events:none;
@@ -47,7 +47,7 @@
   button:disabled { opacity:.42; cursor:not-allowed; }
   button:focus-visible, label.glass:focus-within, input:focus-visible { outline:2px solid var(--maroon-hi); outline-offset:2px; }
   .primary { border-color:rgba(255,150,165,.28); font-weight:600;
-    background:linear-gradient(140deg, rgba(196,58,80,.34), rgba(122,31,43,.14) 50%, rgba(163,41,59,.26)) !important;
+    background:linear-gradient(140deg, rgba(196,58,80,.24), rgba(122,31,43,.05) 50%, rgba(163,41,59,.17)) !important;
     box-shadow:inset 1.5px 1.5px 0 -.5px rgba(255,215,222,.5), inset -1px -1px 0 -.5px rgba(255,180,190,.22), 0 12px 36px rgba(122,31,43,.4); }
 
   /* Floating navbar */
@@ -56,7 +56,7 @@
     background:none; color:var(--muted); font-size:14px; font-weight:500; white-space:nowrap; cursor:pointer; transition:color .2s; }
   .navbar > button:hover { color:#d9cdd0; }
   #navpill { position:absolute; top:6px; bottom:6px; left:6px; z-index:2; overflow:hidden; border-radius:999px; pointer-events:none;
-    background:linear-gradient(140deg, rgba(196,58,80,.32), rgba(122,31,43,.1) 55%, rgba(163,41,59,.22));
+    background:linear-gradient(140deg, rgba(196,58,80,.22), rgba(122,31,43,.04) 55%, rgba(163,41,59,.14));
     box-shadow:inset 1.5px 1.5px 0 -.5px rgba(255,215,222,.55), inset -1px -1px 0 -.5px rgba(255,180,190,.25), inset 0 0 12px rgba(255,160,175,.12), 0 6px 18px rgba(122,31,43,.35); }
   .navtrack { position:absolute; top:0; bottom:0; display:flex; gap:2px; }
   .navtrack button { color:#fff; text-shadow:0 0 12px rgba(255,170,185,.45); }
@@ -77,7 +77,7 @@
   #parts { display:flex; flex-wrap:wrap; gap:8px; }
   .chip { padding:8px 16px !important; font-size:14px; }
   .chip small { color:var(--muted); margin-left:8px; font-size:12px; }
-  .chip.on { border-color:rgba(255,150,165,.32); background:linear-gradient(140deg, rgba(196,58,80,.3), rgba(122,31,43,.12)); }
+  .chip.on { border-color:rgba(255,150,165,.32); background:linear-gradient(140deg, rgba(196,58,80,.2), rgba(122,31,43,.05)); }
   .chip.on small { color:#f3c4cc; }
   #enrol { display:grid; gap:10px; border-top:1px solid rgba(255,255,255,.08); padding-top:14px; }
   #enrol p, .panel > p { margin:0; font-size:13px; color:var(--muted); }
@@ -145,9 +145,9 @@
   #verdict { margin:16px 0 12px; padding:20px; border-radius:28px; font-size:30px; font-weight:700; letter-spacing:.06em; text-align:center; transition:background .3s, border-color .3s; }
   #verdict small { display:block; font-size:13px; font-weight:400; letter-spacing:0; color:rgba(255,255,255,.75); }
   #verdict:not(.pass):not(.reject):not(.nomatch) { font-size:16px; font-weight:500; letter-spacing:0; color:var(--muted); }
-  #verdict.pass { background:linear-gradient(140deg, rgba(47,191,113,.32), rgba(20,90,52,.14)); border-color:rgba(127,240,176,.4); }
-  #verdict.reject { background:linear-gradient(140deg, rgba(255,77,94,.36), rgba(140,24,40,.16)); border-color:rgba(255,150,160,.45); }
-  #verdict.nomatch { background:linear-gradient(140deg, rgba(255,179,71,.3), rgba(130,80,10,.14)); border-color:rgba(255,210,150,.45); }
+  #verdict.pass { background:linear-gradient(140deg, rgba(47,191,113,.24), rgba(20,90,52,.07)); border-color:rgba(127,240,176,.4); }
+  #verdict.reject { background:linear-gradient(140deg, rgba(255,77,94,.27), rgba(140,24,40,.08)); border-color:rgba(255,150,160,.45); }
+  #verdict.nomatch { background:linear-gradient(140deg, rgba(255,179,71,.22), rgba(130,80,10,.07)); border-color:rgba(255,210,150,.45); }
   .actions { margin-bottom:12px; }
   #inspect { width:100%; padding:18px; font-size:18px; font-weight:700; letter-spacing:.14em; -webkit-backdrop-filter:blur(28px) saturate(200%); backdrop-filter:blur(28px) saturate(200%); }
   #inspect:disabled { opacity:1; color:rgba(255,255,255,.4); filter:saturate(.35); }
@@ -538,15 +538,24 @@ navTrack.className = "navtrack";
 navBtns.forEach(b => { const c = b.cloneNode(true); c.removeAttribute("data-tab"); c.tabIndex = -1; navTrack.append(c); });
 $("navpill").append(navTrack);
 
-function setTab(t) {
-  if (t === tab) return;
-  const dir = Math.sign(TABS.indexOf(t) - TABS.indexOf(tab)), main = document.querySelector("main");
-  const before = new Map([...main.children].filter(el => !el.hidden).map(el => [el, el.getBoundingClientRect().top]));
-  tab = t;
+let switching = 0;
+async function setTab(t) {
+  const from = navBtns.find(b => b.classList.contains("on")).dataset.tab;
+  if (t === from) return;
+  const dir = Math.sign(TABS.indexOf(t) - TABS.indexOf(from)), main = document.querySelector("main"), id = ++switching;
   navBtns.forEach(b => { b.classList.toggle("on", b.dataset.tab === t); b.setAttribute("aria-current", b.dataset.tab === t); });
-  movePill(); setMode();
-  if (calm()) return;
-  // Content flows: blocks that stay slide to their new place, new ones and changed text blur in from the travel direction
+  movePill();
+  if (calm()) { tab = t; return setMode(); }
+  // Content passes through: what is leaving blurs out against the travel direction...
+  const moving = [...main.children, $("sub"), $("viewcap"), verdict];
+  const leaving = [...main.querySelectorAll(":scope > section:not([hidden])"), $("sub"), $("viewcap"), verdict];
+  const before = new Map([...main.children].filter(el => !el.hidden).map(el => [el, el.getBoundingClientRect().top]));
+  await Promise.all(leaving.map(el => el.animate([{}, { opacity: 0, filter: "blur(10px)", transform: `translateX(${-dir * 30}px) scale(.98)` }],
+    { duration: 170, easing: "cubic-bezier(.5,0,.9,.6)", fill: "forwards" }).finished.catch(() => {})));
+  if (id !== switching) return;  // a newer tap took over
+  moving.forEach(el => el.getAnimations().forEach(a => a.cancel()));
+  tab = t; setMode();
+  // ...then blocks that stay glide to their new place, and new ones and changed text blur in from the travel direction
   const ease = "cubic-bezier(.2,.9,.25,1)";
   for (const el of main.children) {
     if (el.hidden) continue;
