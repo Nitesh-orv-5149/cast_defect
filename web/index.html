@@ -428,6 +428,19 @@ let refBackbone, refNN, profiles = [], active = null, enrolImgs = [];
 // ---------- CAD mode: compare the photo with the CAD model (outline, designed holes, features; web/cad.js) ----------
 let cadParts = [], cadSel = "", cadProf = null, cadBuilding = null, cadNew = null;
 const loadCadLib = () => window.CAD ? Promise.resolve() : loadScript("cad.js");
+// The heavy work (rendering CAD views, inspecting photos) runs in a worker built from the same cad.js
+let cadWorker, cadMsgId = 0;
+const cadPending = {};
+function cadCall(msg, onProgress, transfer) {
+  cadWorker ||= Object.assign(new Worker("cad.js"), { onmessage: ({ data }) => {
+    const p = cadPending[data.id];
+    if (!p) return;
+    if (data.progress) return p.onProgress?.(...data.progress);
+    delete cadPending[data.id];
+    data.error ? p.no(new Error(data.error)) : p.ok(data.result);
+  } });
+  return new Promise((ok, no) => { const id = ++cadMsgId; cadPending[id] = { ok, no, onProgress }; cadWorker.postMessage({ ...msg, id }, transfer || []); });
+}
 async function loadCadParts(select) {
   try { cadParts = await store("readonly", s => s.getAll(), "cad"); } catch (e) { cadParts = []; }
   if (select !== undefined) cadSel = select;
@@ -445,13 +458,10 @@ function ensureCadProfile() {
   if (!part || cadProf?.name === part.name || cadBuilding === part.name) return;
   cadBuilding = part.name;
   (async () => {
-    await loadCadLib();
-    const prof = await CAD.buildProfile(CAD.prepare(part.tris, part.face).tris, { camDist: part.camMm, onProgress: async (i, n) => {
+    await cadCall({ cmd: "profile", name: part.name, tris: part.tris, face: part.face, camDist: part.camMm }, (i, n) => {
       if (tab === "cad" && cadSel === part.name) { verdict.className = ""; verdict.textContent = `Preparing “${part.name}” from its CAD: view ${i} of ${n}…`; }
-      await new Promise(r => setTimeout(r));
-    } });
-    prof.name = part.name;
-    if (cadBuilding === part.name) { cadProf = prof; cadBuilding = null; }
+    });
+    if (cadBuilding === part.name) { cadProf = { name: part.name }; cadBuilding = null; }
     setMode();
   })().catch(err => { console.error(err); cadBuilding = null; verdict.textContent = "Could not prepare the CAD part: " + err.message; });
 }
@@ -499,20 +509,22 @@ $("cadcancel").onclick = () => {
 $("caddel").onclick = async () => {
   if (!cadSel || cadSel === "__new" || !confirm(`Delete the CAD part “${cadSel}”?`)) return;
   await store("readwrite", s => s.delete(cadSel), "cad");
+  if (cadWorker) cadCall({ cmd: "drop", name: cadSel }).catch(() => {});
   if (cadProf?.name === cadSel) cadProf = null;
   await loadCadParts();
 };
 async function inspectCad(raw) {
-  await new Promise(r => setTimeout(r, 40));  // let the scan line paint before the CPU work
-  const S = raw.width, px = raw.getContext("2d").getImageData(0, 0, S, S).data;
-  const st = CAD.measure(cadProf, px, S, S), d = CAD.decide(st), part = cadProf.name;
-  if (st.noPart) return { mode: "cad", part, verdict: "NO MATCH", findings: [], pDefect: 1,
+  const S = raw.width, px = raw.getContext("2d").getImageData(0, 0, S, S).data, part = cadProf.name;
+  const d = await cadCall({ cmd: "inspect", name: part, rgba: px, w: S, h: S }, null, [px.buffer]);
+  if (d.noPart) return { mode: "cad", part, verdict: "NO MATCH", findings: [], pDefect: 1,
     detail: "No part found: use a plain coloured mat (green or blue) and keep the whole part in view" };
-  const ov = CAD.overlay(cadProf, st, d.mask, S, S), c = document.createElement("canvas");
-  c.width = c.height = S; c.getContext("2d").putImageData(new ImageData(ov.rgba, S, S), 0, 0);
-  const detail = d.verdict === "PASS" ? "Matches the CAD: outline and designed holes as expected · red = CAD edges, blue = designed holes"
+  const c = document.createElement("canvas");
+  c.width = c.height = S; c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(d.overlay.buffer), S, S), 0, 0);
+  const st = d, ov = { centroid: d.centroid };
+  const note = d.unchecked ? ` · ${d.unchecked} designed hole${d.unchecked > 1 ? "s" : ""} too deep or off-centre to see through from here, not checked` : "";
+  const detail = d.verdict === "PASS" ? "Matches the CAD: outline and designed holes as expected" + note
     : d.verdict === "WRONG PART" ? `Doesn’t match “${part}”: ${d.findings[0].text}. Check the part type and the face shown to the camera.`
-    : d.findings.map(f => f.text).join(" · ");
+    : d.findings.map(f => f.text).join(" · ") + note;
   return { mode: "cad", part, verdict: d.verdict, detail, findings: d.findings, overlay: c, centroid: ov.centroid,
     iou: st.iou, featureRatio: st.featureRatio, pDefect: d.verdict === "PASS" ? 0 : 1 };
 }

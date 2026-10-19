@@ -63,14 +63,15 @@ function blur(src, w, h, sigma, radius) {
   for (let i = -r; i <= r; i++) s += (k[i + r] = Math.exp(-(i * i) / (2 * sigma * sigma)));
   for (let i = 0; i < k.length; i++) k[i] /= s;
   const tmp = new Float32Array(w * h), out = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    let a = 0;
-    for (let i = -r; i <= r; i++) a += k[i + r] * src[y * w + Math.min(w - 1, Math.max(0, x + i))];
-    tmp[y * w + x] = a;
+  const cx = Int32Array.from({ length: w + 2 * r }, (_, i) => Math.min(w - 1, Math.max(0, i - r)));
+  const cy = Int32Array.from({ length: h + 2 * r }, (_, i) => Math.min(h - 1, Math.max(0, i - r)));
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) { let a = 0; for (let i = 0; i <= 2 * r; i++) a += k[i] * src[row + cx[x + i]]; tmp[row + x] = a; }
   }
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     let a = 0;
-    for (let i = -r; i <= r; i++) a += k[i + r] * tmp[Math.min(h - 1, Math.max(0, y + i)) * w + x];
+    for (let i = 0; i <= 2 * r; i++) a += k[i] * tmp[cy[y + i] * w + x];
     out[y * w + x] = a;
   }
   return out;
@@ -86,18 +87,42 @@ function sobel(src, w, h) {
   return [gx, gy];
 }
 
-// Separable square max/min filter; pixels outside the image are ignored
+// Separable square max/min filter; pixels outside the image are ignored.
+// Binary masks (Uint8Array) use a sliding window count, O(1) per pixel; float maps use a direct loop.
 function rank(src, w, h, k, isMax) {
-  const r = k >> 1, tmp = new (src.constructor)(w * h), out = new (src.constructor)(w * h);
-  const pick = isMax ? Math.max : Math.min;
+  const r = k >> 1;
+  if (src instanceof Uint8Array) {
+    const tmp = new Uint8Array(w * h), out = new Uint8Array(w * h);
+    const pass = (inp, o, len, n, stride, step) => {
+      for (let line = 0; line < n; line++) {
+        const base = line * stride;
+        let sum = 0, cnt = 0;
+        for (let i = 0; i <= Math.min(len - 1, r); i++) { sum += inp[base + i * step] ? 1 : 0; cnt++; }
+        for (let i = 0; i < len; i++) {
+          o[base + i * step] = isMax ? (sum > 0 ? 1 : 0) : (sum === cnt ? 1 : 0);
+          const add = i + r + 1, rem = i - r;
+          if (add < len) { sum += inp[base + add * step] ? 1 : 0; cnt++; }
+          if (rem >= 0) { sum -= inp[base + rem * step] ? 1 : 0; cnt--; }
+        }
+      }
+    };
+    pass(src, tmp, w, h, w, 1);
+    pass(tmp, out, h, w, 1, w);
+    return out;
+  }
+  const tmp = new Float32Array(w * h), out = new Float32Array(w * h);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     let v = src[y * w + x];
-    for (let i = Math.max(0, x - r); i <= Math.min(w - 1, x + r); i++) v = pick(v, src[y * w + i]);
+    const a = Math.max(0, x - r), b = Math.min(w - 1, x + r);
+    if (isMax) { for (let i = a; i <= b; i++) { const t = src[y * w + i]; if (t > v) v = t; } }
+    else { for (let i = a; i <= b; i++) { const t = src[y * w + i]; if (t < v) v = t; } }
     tmp[y * w + x] = v;
   }
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     let v = tmp[y * w + x];
-    for (let i = Math.max(0, y - r); i <= Math.min(h - 1, y + r); i++) v = pick(v, tmp[i * w + x]);
+    const a = Math.max(0, y - r), b = Math.min(h - 1, y + r);
+    if (isMax) { for (let i = a; i <= b; i++) { const t = tmp[i * w + x]; if (t > v) v = t; } }
+    else { for (let i = a; i <= b; i++) { const t = tmp[i * w + x]; if (t < v) v = t; } }
     out[y * w + x] = v;
   }
   return out;
@@ -207,6 +232,19 @@ function render(tris, R, ppm, size, camDist) {
   const mask = new Uint8Array(N), dfin = new Float32Array(N);
   for (let p = 0; p < N; p++) if (fid[p] >= 0) { mask[p] = 1; dfin[p] = depth[p]; }
   const holes = enclosedBackground(mask, size, size);
+  // Hole mouths: each through-hole plus the steep walls connected to it. At a slightly different camera angle the
+  // background can show anywhere in the mouth, so only openings outside every mouth are unexpected.
+  const mouth = components(holes, size, size, false).lab;
+  const queue = [];
+  for (let p = 0; p < N; p++) if (mouth[p]) queue.push(p);
+  for (let qi = 0; qi < queue.length; qi++) {
+    const p = queue[qi], x = p % size, y = (p / size) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy, q = yy * size + xx;
+      if (xx < 0 || yy < 0 || xx >= size || yy >= size || mouth[q] || !mask[q] || Math.abs(nz[fid[q]]) > 0.4) continue;
+      mouth[q] = mouth[p]; queue.push(q);
+    }
+  }
   const outline = and(mask, not(erode(mask, size, size, 3)));
   const edges = outline.slice(), cosv = Math.cos(25 * Math.PI / 180);
   for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
@@ -218,7 +256,7 @@ function render(tris, R, ppm, size, camDist) {
       if (nx[f] * nx[g] + ny[f] * ny[g] + nz[f] * nz[g] < cosv || Math.abs(dfin[p] - dfin[q]) > 0.8) edges[p] = 1;
     }
   }
-  return { mask, holes, edges, outline, depth: dfin, size };
+  return { mask, holes, mouth, edges, outline, depth: dfin, size };
 }
 function rot(R, t, i) {
   const X = t[i * 3], Y = t[i * 3 + 1], Z = t[i * 3 + 2];
@@ -266,6 +304,8 @@ async function buildProfile(tris, opts = {}) {
 
 // ---------------------------------------------------------------- photo side
 
+const LIN = Float32Array.from({ length: 1024 }, (_, i) => { const c = i / 4 / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
+
 // Part mask on a coloured mat: how much of the mat's own hue a pixel carries relative to its lightness.
 // Lit and shadowed mat score the same, grey metal (highlights included) ~0; Otsu splits the two.
 function segment(rgba, w, h) {
@@ -273,7 +313,7 @@ function segment(rgba, w, h) {
   for (let p = 0; p < N; p++) { R[p] = rgba[p * 4]; G[p] = rgba[p * 4 + 1]; B[p] = rgba[p * 4 + 2]; }
   const Rb = blur(R, w, h, 1.1, 2), Gb = blur(G, w, h, 1.1, 2), Bb = blur(B, w, h, 1.1, 2);
   const L = new Float32Array(N), A = new Float32Array(N), Bv = new Float32Array(N);
-  const lin = c => (c /= 255) <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  const lin = c => { const i = Math.min(1023, Math.max(0, c * 4)), k = i | 0, f = i - k; return LIN[k] + f * (LIN[Math.min(1023, k + 1)] - LIN[k]); };
   const fl = t => t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116;
   for (let p = 0; p < N; p++) {
     const r = lin(Rb[p]), g = lin(Gb[p]), b = lin(Bb[p]);
@@ -355,7 +395,7 @@ function align(prof, mask, w, h) {
   perView.sort((p, q) => q.iou - p.iou);
   // The outline barely changes with a few degrees of tilt, but what shows through deep holes does: fine-align the
   // views whose outline matches about equally well and keep the one whose see-through holes agree with the photo.
-  const cands = perView.filter(c => c.iou >= perView[0].iou - 0.015).slice(0, 4);
+  const cands = perView.filter(c => c.iou >= perView[0].iou - 0.015).slice(0, 3);
   let best = null;
   for (const c of cands) {
     const W = refine(prof, c, mask, w, h, cx, cy), v = prof.views[c.vi], tm = v.rd.mask, th = v.rd.holes;
@@ -375,9 +415,9 @@ function refine(prof, c, mask, w, h, cx, cy) {
   const W = invert(A);
   const T = blur(Float32Array.from(v.rd.mask), S, S, 2.0), I = blur(Float32Array.from(mask), w, h, 2.0 / c.scale);
   const [Ix, Iy] = sobel(I, w, h);
-  for (let it = 0; it < 40; it++) {
-    const H = new Float64Array(36), g = new Float64Array(6);
-    for (let y = 0; y < S; y += 2) for (let x = 0; x < S; x += 2) {
+  for (let it = 0; it < 30; it++) {
+    const H = new Float64Array(36), g = new Float64Array(6), stp = it < 12 ? 3 : 2;
+    for (let y = 0; y < S; y += stp) for (let x = 0; x < S; x += stp) {
       const t = T[y * S + x], [u, vv] = apply(W, x, y), iw = sample(I, w, h, u, vv);
       if ((t < 0.01 && iw < 0.01) || (t > 0.99 && iw > 0.99)) continue;
       const gx = sample(Ix, w, h, u, vv) / 8, gy = sample(Iy, w, h, u, vv) / 8, e = iw - t;
@@ -427,17 +467,25 @@ function measure(prof, rgba, w, h) {
   let inter = 0, uni = 0;
   for (let p = 0; p < N; p++) { inter += pm[p] && tm[p]; uni += pm[p] || tm[p]; }
   const st = { iou: inter / Math.max(uni, 1), featureRatio: on / Math.max(off, 1e-6), view: al.view, tilt: prof.views[al.view].tilt, W: al.W, size: S };
-  const tol = Math.max(1, Math.round(ppm)), kt = 2 * tol + 1;
-  // designed through-holes: how open is each one
-  const hc = components(th, S, S, false), core = erode(th, S, S, 3);
+  const tol = Math.max(1, Math.round(ppm)), kt = 2 * tol + 1, ml = rd.mouth, mouth = ml.map(v => v ? 1 : 0);
+  // designed through-holes: is background showing anywhere in the hole's mouth, about as much as the CAD predicts?
+  const hc = components(th, S, S, false);
   st.holes = [];
   for (let j = 1; j <= hc.n; j++) {
-    let n = 0, clear = 0, nAll = 0, clearAll = 0;
-    for (let p = 0; p < N; p++) if (hc.lab[p] === j) { nAll++; clearAll += !pm[p]; if (core[p]) { n++; clear += !pm[p]; } }
-    st.holes.push({ label: j, areaMm2: nAll * mm2, open: n ? clear / n : clearAll / Math.max(nAll, 1) });
+    let see = 0, clear = 0, mouthPx = 0;
+    for (let p = 0; p < N; p++) { if (hc.lab[p] === j) see++; if (ml[p] === j) { mouthPx++; if (!pm[p]) clear++; } }
+    st.holes.push({ label: j, areaMm2: see * mm2, mouthMm2: mouthPx * mm2, open: Math.min(1, clear / Math.max(see, 1)) });
   }
-  st.holeLabels = hc.lab;
-  const photoHoles = enclosedBackground(pm, S, S), expectedBg = dilate(or(th, not(tm)), S, S, kt);
+  st.holeLabels = ml;
+  const photoHoles = enclosedBackground(pm, S, S), expectedBg = dilate(or(mouth, not(tm)), S, S, kt);
+  // part-vs-CAD disagreement away from the outline band and the hole mouths, as a share of the part's area
+  const tmArea = count(tm), freeOfHoles = not(dilate(mouth, S, S, kt));
+  for (const mmBand of [1.0, 1.5, 2.0]) {
+    const kb = 2 * Math.max(1, Math.round(mmBand * ppm)) + 1, away = and(not(dilate(rd.outline, S, S, kb)), freeOfHoles);
+    let bad = 0;
+    for (let p = 0; p < N; p++) bad += away[p] && (pm[p] !== tm[p]);
+    st["mismatch" + mmBand * 10] = bad / Math.max(tmArea, 1);
+  }
   const comp = (m, conn8) => { const c = components(m, S, S, conn8); return { lab: c.lab, items: c.area.slice(1).map((a, i) => ({ label: i + 1, areaMm2: a * mm2 })) }; };
   st.extra = comp(and(photoHoles, not(expectedBg)), false);
   const band = dilate(rd.outline, S, S, kt);
@@ -446,28 +494,30 @@ function measure(prof, rgba, w, h) {
   return st;
 }
 
-const DEFAULTS = { iouMin: 0.90, featureRatioMin: 1.45, patternMismatch: 0.5, holeOpenMin: 0.5, extraHoleMm2: 2.0, outlineMm2: 6.0 };
+const DEFAULTS = { iouMin: 0.90, featureRatioMin: 1.45, patternMismatch: 0.5, holeOpenMin: 0.5, extraHoleMm2: 2.0, outlineMm2: 6.0, seeThroughMin: 0.45 };
 
 // Verdict plus findings; `mask` marks finding pixels in the template frame (for drawing)
 function decide(st, cfg) {
   cfg = { ...DEFAULTS, ...cfg };
-  if (st.noPart) return { verdict: "NO PART", findings: [], mask: null };
+  if (st.noPart) return { verdict: "NO PART", findings: [], mask: null, unchecked: 0 };
   const S = st.size, mask = new Uint8Array(S * S), F = [];
-  const blocked = st.holes.filter(hh => hh.open < cfg.holeOpenMin);
+  // A deep or off-axis hole may show almost no background from this camera position; it can't be checked for "blocked"
+  const checkable = st.holes.filter(hh => hh.areaMm2 >= cfg.seeThroughMin * (hh.mouthMm2 || hh.areaMm2));
+  const blocked = checkable.filter(hh => hh.open < cfg.holeOpenMin), unchecked = st.holes.length - checkable.length;
   const holeArea = st.holes.reduce((s, hh) => s + hh.areaMm2, 0) || 1;
   const extra = st.extra.items.filter(c => c.areaMm2 >= cfg.extraHoleMm2);
   const extraArea = extra.reduce((s, c) => s + c.areaMm2, 0);
-  const patternOff = blocked.length >= Math.max(2, Math.ceil(cfg.patternMismatch * st.holes.length)) || extraArea > cfg.patternMismatch * holeArea;
+  const patternOff = blocked.length >= Math.max(2, Math.ceil(cfg.patternMismatch * checkable.length)) || extraArea > cfg.patternMismatch * holeArea;
   if (st.iou < cfg.iouMin || st.featureRatio < cfg.featureRatioMin || patternOff) {
     const why = st.iou < cfg.iouMin ? "outline does not match" : patternOff ? "hole pattern does not match" : "features do not match";
-    return { verdict: "WRONG PART", findings: [{ type: "mismatch", text: why }], mask: null };
+    return { verdict: "WRONG PART", findings: [{ type: "mismatch", text: why }], mask: null, unchecked };
   }
   const mark = (lab, label) => { for (let p = 0; p < lab.length; p++) if (lab[p] === label) mask[p] = 1; };
   for (const hh of blocked) { F.push({ type: "blocked_hole", text: `designed hole blocked (${hh.areaMm2.toFixed(0)} mm²)` }); mark(st.holeLabels, hh.label); }
   for (const c of extra) { F.push({ type: "unexpected_hole", text: `hole not in the CAD (${c.areaMm2.toFixed(1)} mm²)` }); mark(st.extra.lab, c.label); }
   for (const c of st.missing.items.filter(c => c.areaMm2 >= cfg.outlineMm2)) { F.push({ type: "missing_material", text: `missing material (${c.areaMm2.toFixed(0)} mm²)` }); mark(st.missing.lab, c.label); }
   for (const c of st.excess.items.filter(c => c.areaMm2 >= cfg.outlineMm2)) { F.push({ type: "excess_material", text: `extra material (${c.areaMm2.toFixed(0)} mm²)` }); mark(st.excess.lab, c.label); }
-  return { verdict: F.length ? "REJECT" : "PASS", findings: F, mask };
+  return { verdict: F.length ? "REJECT" : "PASS", findings: F, mask, unchecked };
 }
 
 // RGBA overlay in photo coordinates: CAD edges red, designed holes blue, findings filled; plus the findings' centroid
@@ -498,6 +548,26 @@ function preview(tris, face, size) {
     out.set(rd.edges[p] ? [255, 120, 130, 255] : rd.mask[p] ? [v, v, v, 255] : [0, 0, 0, 0], p * 4);
   }
   return out;
+}
+
+// Web Worker mode: the page posts {id, cmd, ...}; profiles live in the worker so inspections never block the UI
+if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope) {
+  const profiles = {};
+  self.onmessage = async ({ data: m }) => {
+    try {
+      if (m.cmd === "profile") {
+        profiles[m.name] = await buildProfile(prepare(m.tris, m.face).tris, { camDist: m.camDist,
+          onProgress: (i, n) => self.postMessage({ id: m.id, progress: [i, n] }) });
+        self.postMessage({ id: m.id, result: true });
+      } else if (m.cmd === "inspect") {
+        const prof = profiles[m.name];
+        if (!prof) throw new Error("CAD part not prepared");
+        const st = measure(prof, m.rgba, m.w, m.h), d = decide(st, m.cfg), ov = st.noPart ? null : overlay(prof, st, d.mask, m.w, m.h);
+        self.postMessage({ id: m.id, result: { noPart: !!st.noPart, iou: st.iou, featureRatio: st.featureRatio, verdict: d.verdict, unchecked: d.unchecked,
+          findings: d.findings, overlay: ov && ov.rgba, centroid: ov && ov.centroid } }, ov ? [ov.rgba.buffer] : []);
+      } else if (m.cmd === "drop") { delete profiles[m.name]; self.postMessage({ id: m.id, result: true }); }
+    } catch (err) { self.postMessage({ id: m.id, error: err.message || String(err) }); }
+  };
 }
 
 const CAD = { segment, loadCAD, parseSTL, parseOBJ, prepare, buildProfile, measure, decide, overlay, preview, FACES: Object.keys(FACES), DEFAULTS };

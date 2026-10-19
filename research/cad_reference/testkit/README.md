@@ -30,3 +30,12 @@ Run it (from `research/cad_reference`, deps in `requirements.txt`):
 | 05 | same rod upside down | PASS | bottom face has the same outline and holes; only the shallow pocket differs (interior-feature blind spot) |
 
 As a pass/fail gate: 9 of 11 bad parts kept out (both misses explained above), 3 of 4 good parts passed.
+
+## Update: browser engine after the hole-visibility fixes: 9 / 12
+
+Two fixes, chosen on a separate 649-photo validation set (four parts), not on this kit:
+openings are only "unexpected" outside a designed hole's mouth (its see-through part plus the steep walls connected
+to it), and a hole the camera can barely see through from this position (deep, narrow, off-centre) is reported as
+not checkable instead of "blocked". Result on this kit: all 4 good parts pass, 07 (uncored bore) is now REJECT;
+misses are 02 (side-wall chip, invisible from above), 05 (upside down) and 06 (the blocked lug is one of the
+holes that can't be seen through from this camera position; the app says so in the result).
