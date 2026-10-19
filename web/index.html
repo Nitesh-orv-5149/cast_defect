@@ -7,78 +7,234 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<meta name="theme-color" content="#111111">
+<meta name="theme-color" content="#0b0709">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap">
 <style>
-  :root { --bg:#111; --fg:#eee; --muted:#888; --pass:#1b8a3a; --reject:#c62828; --card:#1d1d1d; }
+  :root { --bg:#0b0709; --fg:#f4eef0; --muted:#a8989d; --maroon:#7a1f2b; --maroon-2:#a3293b; --maroon-hi:#e8788a;
+          --pass:#2fbf71; --reject:#ff4d5e; --amber:#ffb347; --stroke:rgba(255,255,255,.14); }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:16px system-ui, sans-serif; }
-  main { max-width:760px; margin:auto; padding:16px; }
-  h1 { font-size:20px; margin:0 0 12px; }
-  .views { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-  .views figure { margin:0; background:var(--card); border-radius:8px; overflow:hidden; }
-  .views figcaption { font-size:13px; color:var(--muted); padding:4px 8px; }
-  video, canvas.view { width:100%; aspect-ratio:1; object-fit:cover; display:block; background:#000; }
-  #verdict { margin:12px 0; padding:18px; border-radius:8px; font-size:28px; font-weight:700; text-align:center; background:var(--card); }
-  #verdict.pass { background:var(--pass); } #verdict.reject { background:var(--reject); }
-  #verdict small { display:block; font-size:15px; font-weight:400; opacity:.9; }
-  .row { display:flex; gap:8px; }
-  button, label.btn { flex:1; padding:18px; font-size:20px; font-weight:700; border:0; border-radius:8px; background:#2962ff; color:#fff; cursor:pointer; text-align:center; }
-  button:disabled { opacity:.5; }
-  label.btn, #export { background:#333; font-size:16px; font-weight:400; }
-  #history { list-style:none; padding:0; margin:12px 0; }
-  #history li { display:flex; align-items:center; gap:10px; padding:6px; border-bottom:1px solid #222; font-size:14px; }
-  #history img { width:48px; height:48px; border-radius:4px; }
-  #history li button { flex:0; padding:6px 10px; font-size:13px; font-weight:400; background:#333; }
-  .r { color:#ff6b6b; font-weight:700; } .p { color:#5fd47f; font-weight:700; } .n { color:#ffb347; font-weight:700; }
-  #verdict.nomatch { background:#b26a00; }
-  select, input[type=text] { width:100%; padding:12px; font-size:16px; border-radius:8px; border:1px solid #333; background:var(--card); color:var(--fg); }
-  .bar { display:flex; gap:8px; margin-bottom:12px; } .bar select { flex:1; } .bar button { flex:0 0 auto; padding:10px 14px; font-size:14px; font-weight:400; background:#333; }
-  #enrol { background:var(--card); border-radius:8px; padding:12px; margin-bottom:12px; display:grid; gap:10px; }
-  #enrol[hidden], #sens[hidden] { display:none; }
-  #enrol h2 { font-size:16px; margin:0; } #enrol p { margin:0; font-size:14px; color:var(--muted); }
-  #enrol .row button, #enrol .row label.btn { font-size:15px; padding:14px; }
-  #thumbs { display:flex; flex-wrap:wrap; gap:6px; } #thumbs img { width:52px; height:52px; border-radius:4px; object-fit:cover; }
-  .chk { font-size:14px; display:flex; gap:8px; align-items:center; }
-  #sens { display:flex; gap:10px; align-items:center; font-size:13px; color:var(--muted); margin-bottom:12px; } #sens input { flex:1; }
+  html { color-scheme:dark; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--fg); font:15px/1.5 "Poppins", system-ui, sans-serif; -webkit-font-smoothing:antialiased; }
+  button, input, select, textarea { font:inherit; color:inherit; }
+  svg { width:18px; height:18px; flex:none; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+  [hidden] { display:none !important; }
+
+  /* Maroon light behind the glass, so the blur has something to refract */
+  .bg { position:fixed; inset:0; z-index:-1; overflow:hidden; background:var(--bg); }
+  .bg i { position:absolute; border-radius:50%; filter:blur(70px); opacity:.65; }
+  .bg i:nth-child(1) { width:520px; height:520px; left:-160px; top:-180px; background:#6e1a26; }
+  .bg i:nth-child(2) { width:420px; height:420px; right:-140px; top:28%; background:#4f1220; }
+  .bg i:nth-child(3) { width:560px; height:400px; left:20%; bottom:-220px; background:#5a1522; opacity:.5; }
+
+  /* Liquid glass */
+  .glass, #verdict { position:relative; isolation:isolate; border:1px solid var(--stroke);
+    background:linear-gradient(140deg, rgba(255,255,255,.11), rgba(255,255,255,.03) 55%, rgba(255,255,255,.06));
+    -webkit-backdrop-filter:blur(22px) saturate(180%); backdrop-filter:blur(22px) saturate(180%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.28), inset 0 -1px 0 rgba(255,255,255,.05), inset 0 0 24px rgba(255,255,255,.04), 0 12px 32px rgba(0,0,0,.38); }
+  .glass::before, #verdict::before { content:""; position:absolute; inset:0; z-index:-1; border-radius:inherit; pointer-events:none;
+    background:radial-gradient(120% 70% at 30% -10%, rgba(255,255,255,.22), transparent 55%); }
+  button.glass, label.glass { border-radius:999px; padding:13px 20px; font-weight:500; cursor:pointer; text-align:center;
+    transition:transform .15s, background .2s, box-shadow .2s, opacity .2s; -webkit-tap-highlight-color:transparent; }
+  button.glass:hover:not(:disabled), label.glass:hover { background:linear-gradient(140deg, rgba(255,255,255,.17), rgba(255,255,255,.06) 55%, rgba(255,255,255,.1)); }
+  button.glass:active:not(:disabled), label.glass:active { transform:scale(.97); }
+  button:disabled { opacity:.42; cursor:not-allowed; }
+  button:focus-visible, label.glass:focus-within, input:focus-visible { outline:2px solid var(--maroon-hi); outline-offset:2px; }
+  .primary { border-color:rgba(255,150,165,.38); font-weight:600;
+    background:linear-gradient(140deg, rgba(196,58,80,.6), rgba(122,31,43,.45) 55%, rgba(163,41,59,.55)) !important;
+    box-shadow:inset 0 1px 0 rgba(255,210,218,.45), inset 0 -1px 0 rgba(0,0,0,.2), 0 14px 40px rgba(122,31,43,.55); }
+
+  /* Floating navbar */
+  .navbar { position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:50; display:flex; gap:2px; padding:6px; border-radius:999px; }
+  .navbar button { position:relative; z-index:1; display:flex; align-items:center; gap:8px; padding:10px 18px; border:0; border-radius:999px;
+    background:none; color:var(--muted); font-size:14px; font-weight:500; white-space:nowrap; cursor:pointer; transition:color .2s; }
+  .navbar button:hover, .navbar button.on { color:#fff; }
+  #navpill { position:absolute; top:6px; bottom:6px; left:6px; border-radius:999px; border:1px solid rgba(255,150,165,.35);
+    background:linear-gradient(140deg, rgba(196,58,80,.55), rgba(122,31,43,.4)); box-shadow:inset 0 1px 0 rgba(255,210,218,.4), 0 6px 18px rgba(122,31,43,.5);
+    transition:left .4s cubic-bezier(.3,1.3,.5,1), width .4s cubic-bezier(.3,1.3,.5,1); }
+  .navbar .s { display:none; }
+
+  main { max-width:880px; margin:auto; padding:92px 16px 32px; }
+  .brand { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+  .brand h1 { margin:0; font-size:24px; font-weight:600; letter-spacing:-.01em; }
+  .brand h1 b { color:var(--maroon-hi); font-weight:600; }
+  .brand p { margin:0; font-size:13px; color:var(--muted); }
+  .brand .tag { margin-left:auto; }
+
+  /* Panels and chips */
+  .panel { border-radius:24px; padding:16px; margin-bottom:16px; display:grid; gap:12px; }
+  .phead { display:flex; align-items:center; gap:8px; }
+  .phead h2, #enrol h2 { margin:0; font-size:15px; font-weight:600; }
+  .phead button { margin-left:auto; padding:7px 14px; font-size:13px; }
+  #parts { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { padding:8px 16px !important; font-size:14px; }
+  .chip small { color:var(--muted); margin-left:8px; font-size:12px; }
+  .chip.on { border-color:rgba(255,150,165,.4); background:linear-gradient(140deg, rgba(196,58,80,.5), rgba(122,31,43,.35)); }
+  .chip.on small { color:#f3c4cc; }
+  #enrol { display:grid; gap:10px; border-top:1px solid rgba(255,255,255,.08); padding-top:14px; }
+  #enrol p, .panel > p { margin:0; font-size:13px; color:var(--muted); }
+  input[type=text] { width:100%; padding:12px 18px; border-radius:999px; border:1px solid var(--stroke); background:rgba(255,255,255,.04); color:var(--fg); }
+  input[type=text]:focus { border-color:var(--maroon-hi); outline:none; }
+  input[type=checkbox], input[type=range] { accent-color:var(--maroon-2); }
+  .chk { font-size:13px; display:flex; gap:8px; align-items:center; color:var(--muted); }
+  #thumbs { display:flex; flex-wrap:wrap; gap:6px; } #thumbs img { width:52px; height:52px; border-radius:12px; object-fit:cover; border:1px solid var(--stroke); }
+  #sens { display:flex; gap:10px; align-items:center; font-size:12px; color:var(--muted); } #sens input { flex:1; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; } .row > * { flex:1 1 140px; white-space:nowrap; }
+  .soon { display:flex; gap:14px; align-items:center; }
+  .soon .ico { flex:none; width:52px; height:52px; border-radius:16px; display:grid; place-items:center; color:var(--maroon-hi);
+    background:rgba(122,31,43,.25); border:1px solid rgba(255,150,165,.25); }
+  .soon .ico svg { width:26px; height:26px; }
+  .soon h2 { margin:0; font-size:16px; font-weight:600; } .soon p { margin:0; font-size:13px; color:var(--muted); }
+
+  /* Camera stage */
+  .stage { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .cam { margin:0; position:relative; aspect-ratio:1; border-radius:28px; overflow:hidden; background:#070405; border:1px solid var(--stroke);
+    box-shadow:0 24px 60px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.08); }
+  .cam video, .cam canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
+  video.mirror { transform:scaleX(-1); }
+  .cam.live::after { content:""; position:absolute; inset:0; pointer-events:none; background:radial-gradient(circle at 50% 50%, transparent 55%, rgba(0,0,0,.45)); }
+  .hud { position:absolute; top:12px; left:12px; right:12px; z-index:3; display:flex; gap:6px; align-items:center; }
+  .hud .end { margin-left:auto; }
+  .tag { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border-radius:999px; font-size:11px; font-weight:600; letter-spacing:.08em;
+    text-transform:uppercase; white-space:nowrap; color:#fff; background:rgba(12,6,8,.45); border:1px solid rgba(255,255,255,.14);
+    -webkit-backdrop-filter:blur(14px) saturate(160%); backdrop-filter:blur(14px) saturate(160%); }
+  .tag:empty { display:none; }
+  .tag.pass { background:rgba(47,191,113,.3); border-color:rgba(127,240,176,.45); }
+  .tag.reject { background:rgba(255,77,94,.32); border-color:rgba(255,150,160,.5); }
+  .tag.nomatch { background:rgba(255,179,71,.3); border-color:rgba(255,210,150,.5); }
+  .dot { width:7px; height:7px; border-radius:50%; background:#ff3b52; animation:pulse 1.6s infinite; }
+  @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(255,59,82,.7); } 70% { box-shadow:0 0 0 7px rgba(255,59,82,0); } 100% { box-shadow:0 0 0 0 rgba(255,59,82,0); } }
+  button.icon { padding:8px !important; display:grid; place-items:center; }
+  /* Corner brackets: the model sees exactly this square */
+  .reticle { position:absolute; inset:11%; z-index:2; pointer-events:none; }
+  .reticle i { position:absolute; width:30px; height:30px; border:0 solid rgba(255,255,255,.85); transition:border-color .2s; }
+  .reticle i:nth-child(1) { top:0; left:0; border-top-width:3px; border-left-width:3px; border-top-left-radius:14px; }
+  .reticle i:nth-child(2) { top:0; right:0; border-top-width:3px; border-right-width:3px; border-top-right-radius:14px; }
+  .reticle i:nth-child(3) { bottom:0; left:0; border-bottom-width:3px; border-left-width:3px; border-bottom-left-radius:14px; }
+  .reticle i:nth-child(4) { bottom:0; right:0; border-bottom-width:3px; border-right-width:3px; border-bottom-right-radius:14px; }
+  .hint { position:absolute; left:50%; bottom:14px; transform:translateX(-50%); z-index:3; white-space:nowrap; }
+  .scan { position:absolute; left:0; right:0; top:-35%; height:35%; z-index:2; opacity:0; pointer-events:none;
+    background:linear-gradient(180deg, transparent, rgba(232,120,138,.32)); border-bottom:2px solid var(--maroon-hi); }
+  .stage.busy .scan { opacity:1; animation:scan .9s linear infinite; }
+  .stage.busy .reticle i { border-color:var(--maroon-hi); }
+  @keyframes scan { to { top:100%; } }
+  .empty { position:absolute; inset:0; z-index:2; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+    padding:24px; text-align:center; color:var(--muted); font-size:13px; background:radial-gradient(circle at 50% 42%, rgba(122,31,43,.28), transparent 62%), #070405; }
+  .empty svg { width:40px; height:40px; stroke-width:1.4; color:var(--maroon-hi); margin-bottom:8px; }
+  .empty b { color:var(--fg); font-weight:500; font-size:15px; }
+  .legend { position:absolute; left:12px; right:12px; bottom:12px; z-index:3; justify-content:center; }
+  .legend span { flex:1; height:6px; border-radius:3px; background:linear-gradient(90deg,#00007f,#0000ff,#00ffff,#7fff7f,#ffff00,#ff0000,#7f0000); }
+
+  /* Verdict, actions, history */
+  #verdict { margin:16px 0 12px; padding:20px; border-radius:28px; font-size:30px; font-weight:700; letter-spacing:.06em; text-align:center; transition:background .3s, border-color .3s; }
+  #verdict small { display:block; font-size:13px; font-weight:400; letter-spacing:0; color:rgba(255,255,255,.75); }
+  #verdict:not(.pass):not(.reject):not(.nomatch) { font-size:16px; font-weight:500; letter-spacing:0; color:var(--muted); }
+  #verdict.pass { background:linear-gradient(140deg, rgba(47,191,113,.45), rgba(20,90,52,.35)); border-color:rgba(127,240,176,.4); }
+  #verdict.reject { background:linear-gradient(140deg, rgba(255,77,94,.5), rgba(140,24,40,.42)); border-color:rgba(255,150,160,.45); }
+  #verdict.nomatch { background:linear-gradient(140deg, rgba(255,179,71,.42), rgba(130,80,10,.35)); border-color:rgba(255,210,150,.45); }
+  .actions { margin-bottom:12px; }
+  #inspect { width:100%; padding:18px; font-size:18px; font-weight:700; letter-spacing:.14em; -webkit-backdrop-filter:blur(28px) saturate(200%); backdrop-filter:blur(28px) saturate(200%); }
+  #inspect:disabled { opacity:1; color:rgba(255,255,255,.4); filter:saturate(.35); }
+  .sect { margin:24px 4px 10px; font-size:12px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+  #history { list-style:none; padding:0; margin:0; display:grid; gap:8px; }
+  #history li { display:flex; align-items:center; gap:12px; padding:8px 10px; border-radius:20px; font-size:13px;
+    background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.07); }
+  #history img { width:44px; height:44px; border-radius:12px; display:block; }
+  #history li .m { flex:1; display:flex; flex-wrap:wrap; justify-content:space-between; column-gap:10px; white-space:nowrap; }
+  #history li .m small { color:var(--muted); font-size:12px; }
+  #history li button { padding:6px 14px; font-size:12px; }
+  .r { color:var(--reject); font-weight:700; } .p { color:var(--pass); font-weight:700; } .n { color:var(--amber); font-weight:700; }
+
+  @media (max-width:640px) {
+    /* Phone: live feed full width, result as a picture-in-picture inset (tap to enlarge) so the verdict stays on screen */
+    .stage { grid-template-columns:1fr; position:relative; }
+    .stage:not(.has-result) .cam.result { display:none; }
+    .cam.result { position:absolute; right:12px; bottom:12px; width:40%; z-index:5; border-radius:20px; cursor:zoom-in;
+      border-color:rgba(255,255,255,.3); box-shadow:0 12px 34px rgba(0,0,0,.6); transition:width .3s cubic-bezier(.3,1.2,.5,1); }
+    .cam.result.big { width:calc(100% - 24px); cursor:zoom-out; }
+    .cam.result:not(.big) .hud { top:8px; left:8px; right:8px; } .cam.result:not(.big) #viewcap, .cam.result:not(.big) .legend { display:none; }
+    .cam.result:not(.big) .tag { padding:3px 8px; font-size:10px; }
+    .stage.has-result .hint { display:none; }
+    .actions { position:sticky; bottom:14px; z-index:20; }
+    .navbar button { padding:9px 13px; font-size:13px; }
+    .navbar .l { display:none; } .navbar .s { display:inline; }
+    .brand h1 { font-size:20px; }
+    #verdict { font-size:26px; }
+  }
+  @media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } }
 </style>
 </head>
 <body>
+<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
+<nav id="nav" class="navbar glass" aria-label="Inspection mode">
+  <span id="navpill"></span>
+  <button data-tab="model" class="on"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg><span class="l">Base model</span><span class="s">Model</span></button>
+  <button data-tab="ref"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 8"/></svg><span class="l">Reference images</span><span class="s">Images</span></button>
+  <button data-tab="cad"><svg viewBox="0 0 24 24"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M12 21.5V12M20.5 7.25L12 12 3.5 7.25"/></svg><span class="l">Reference CAD</span><span class="s">CAD</span></button>
+</nav>
 <main>
-  <h1>Cast Inspector</h1>
-  <div class="bar">
-    <select id="mode" aria-label="Part type"></select>
-    <button id="delprof" hidden>Delete</button>
-  </div>
-  <section id="enrol" hidden>
-    <h2>New part type: show good parts</h2>
-    <p>Photograph 1–20 defect-free parts with the same distance, lighting and background you will inspect with. More photos = more reliable.</p>
-    <input id="pname" type="text" placeholder="Part name, e.g. Valve body A" maxlength="40">
-    <label class="chk"><input type="checkbox" id="anyrot"> Part can sit at any rotation (round parts)</label>
-    <div class="row">
-      <button id="capgood">Capture good part</button>
-      <label class="btn">Upload photos<input id="upgood" type="file" accept="image/*" multiple hidden></label>
-    </div>
-    <div id="thumbs"></div>
-    <p id="enrolinfo">0 / 20 good photos</p>
-    <div class="row"><button id="finish" disabled>Save reference</button><button id="cancel" style="background:#333">Cancel</button></div>
+  <header class="brand">
+    <div><h1>Cast <b>Inspector</b></h1><p id="sub">Pre-trained pump impeller classifier · Grad-CAM explanations</p></div>
+    <span id="status" class="tag">Loading</span>
+  </header>
+
+  <section id="refpanel" class="panel glass" hidden>
+    <div class="phead"><h2>Part types</h2><button id="delprof" class="glass" hidden>Delete</button></div>
+    <div id="parts"></div>
+    <div id="sens" hidden>Stricter<input id="sensr" type="range" min="0.6" max="1.4" step="0.05" value="1" aria-label="Sensitivity">Looser</div>
+    <section id="enrol" hidden>
+      <h2>New part type: show good parts</h2>
+      <p>Photograph 1–20 defect-free parts with the same distance, lighting and background you will inspect with. More photos = more reliable.</p>
+      <input id="pname" type="text" placeholder="Part name, e.g. Valve body A" maxlength="40">
+      <label class="chk"><input type="checkbox" id="anyrot"> Part can sit at any rotation (round parts)</label>
+      <div class="row">
+        <button id="capgood" class="glass">Capture good part</button>
+        <label class="glass">Upload photos<input id="upgood" type="file" accept="image/*" multiple hidden></label>
+      </div>
+      <div id="thumbs"></div>
+      <p id="enrolinfo">0 / 20 good photos</p>
+      <div class="row"><button id="finish" class="glass primary" disabled>Save reference</button><button id="cancel" class="glass">Cancel</button></div>
+    </section>
   </section>
-  <div id="sens" hidden>Stricter<input id="sensr" type="range" min="0.6" max="1.4" step="0.05" value="1" aria-label="Sensitivity">Looser</div>
-  <div class="views">
-    <figure><video id="video" autoplay playsinline muted></video><figcaption>Live camera</figcaption></figure>
-    <figure><canvas id="view" class="view" width="448" height="448"></canvas><figcaption id="viewcap">Why it was flagged (Grad-CAM)</figcaption></figure>
+
+  <section id="cadpanel" class="panel glass" hidden>
+    <div class="soon">
+      <span class="ico"><svg viewBox="0 0 24 24"><path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M12 21.5V12M20.5 7.25L12 12 3.5 7.25"/></svg></span>
+      <div><h2>Reference from a CAD file</h2><p>Upload a STEP or STL of the part to build the reference without photographing good parts. Coming soon.</p></div>
+    </div>
+    <button class="glass" disabled>Upload CAD file</button>
+  </section>
+
+  <div class="stage" id="stage">
+    <figure class="cam live">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <div class="scan" aria-hidden="true"></div>
+      <div class="hud"><span class="tag"><i class="dot"></i>Live</span><span class="tag" id="res"></span>
+        <button id="flip" class="glass icon end" hidden aria-label="Switch camera"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-14.3 4.9M4 12a8 8 0 0 1 14.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg></button></div>
+      <span class="tag hint">Fit the part inside the frame</span>
+      <div id="camoff" class="empty" hidden><svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.5 5H15l2 2.5h2.5A1.5 1.5 0 0 1 21 9v8.5M17.5 19.5h-13A1.5 1.5 0 0 1 3 18V9a1.5 1.5 0 0 1 1.5-1.5H6"/><path d="M9.5 10.5a3 3 0 0 0 4 4"/></svg>
+        <b>Camera unavailable</b>Needs HTTPS or localhost. Use “Test with photo”.</div>
+    </figure>
+    <figure class="cam result">
+      <canvas id="view" class="view" width="448" height="448"></canvas>
+      <div class="hud"><span class="tag" id="viewcap">Grad-CAM</span><span class="tag end" id="viewtag" hidden></span></div>
+      <div id="viewempty" class="empty"><svg viewBox="0 0 24 24"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M4 12h16"/></svg>
+        <b>No inspection yet</b>Press INSPECT or Space</div>
+      <div id="legend" class="tag legend" hidden>Low<span></span>High</div>
+    </figure>
   </div>
+
   <div id="verdict">Loading model…</div>
+  <div class="actions"><button id="inspect" class="glass primary" disabled>INSPECT</button></div>
   <div class="row">
-    <button id="inspect" disabled>INSPECT</button>
+    <label class="glass">Test with photo<input id="file" type="file" accept="image/*" hidden></label>
+    <button id="report" class="glass" hidden>PDF report</button>
+    <button id="export" class="glass">Export CSV</button>
   </div>
-  <div class="row" style="margin-top:8px">
-    <button id="report" hidden style="background:#333;font-size:16px;font-weight:400">Download PDF report</button>
-  </div>
-  <div class="row" style="margin-top:8px">
-    <label class="btn">Test with photo<input id="file" type="file" accept="image/*" hidden></label>
-    <button id="export">Export CSV</button>
-  </div>
+  <h2 class="sect" id="histhead" hidden>Recent inspections</h2>
   <ul id="history"></ul>
 </main>
 
@@ -101,12 +257,26 @@ async function init() {
   const load = () => Promise.all([fetch("meta.json").then(r => r.json()), ort.InferenceSession.create("model.onnx", { executionProviders: ["wasm"] })]);
   [meta, session] = await load().catch(() => new Promise(r => setTimeout(r, 1500)).then(load));
   await loadProfiles();
+  $("status").textContent = "On-device";
   try {
-    video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    await startCam();
   } catch (e) {
     verdict.textContent = "Camera unavailable (needs HTTPS or localhost). Use 'Test with photo'.";
+    $("camoff").hidden = false;
   }
+  const cams = (await navigator.mediaDevices?.enumerateDevices?.().catch(() => []) ?? []).filter(d => d.kind === "videoinput");
+  $("flip").hidden = cams.length < 2;
 }
+
+let facing = "environment";
+async function startCam() {
+  video.srcObject?.getTracks().forEach(t => t.stop());
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
+  video.classList.toggle("mirror", facing === "user");
+}
+video.onloadedmetadata = () => $("res").textContent = `${video.videoWidth}×${video.videoHeight}`;
+$("view").parentElement.onclick = e => e.currentTarget.classList.toggle("big");
+$("flip").onclick = () => { facing = facing === "user" ? "environment" : "user"; startCam().catch(console.error); };
 
 // Square center-crop of any image/video source onto a canvas of size n
 function crop(src, w, h, n) {
@@ -143,7 +313,8 @@ async function inspectModel(raw) {
 async function inspect(src, w, h) {
   const raw = crop(src, w, h, view.width);
   verdict.className = ""; verdict.textContent = "Inspecting…";
-  const r = active ? await inspectRef(raw, active) : await inspectModel(raw);
+  $("stage").classList.add("busy");
+  const r = await (active ? inspectRef(raw, active) : inspectModel(raw)).finally(() => $("stage").classList.remove("busy"));
   const { map, H, W, lo, hi } = r, flagged = r.verdict !== "PASS";
   const t = v => Math.min(1, Math.max(0, (v - lo) / (hi - lo || 1)));
 
@@ -161,6 +332,8 @@ async function inspect(src, w, h) {
 
   verdict.className = { PASS: "pass", REJECT: "reject", "NO MATCH": "nomatch" }[r.verdict];
   verdict.innerHTML = `${r.verdict}<small>${r.detail}</small>`;
+  Object.assign($("viewtag"), { hidden: false, textContent: r.verdict, className: "tag end " + verdict.className });
+  $("viewempty").hidden = true; $("legend").hidden = !flagged; $("stage").classList.add("has-result");
   // Where the evidence sits (3x3 zone of the hottest cell) and how much of the part it covers
   let peak = 0; map.forEach((v, j) => { if (v > map[peak]) peak = j; });
   const zr = Math.floor(Math.floor(peak / W) * 3 / H), zc = Math.floor((peak % W) * 3 / W);
@@ -280,27 +453,54 @@ function renderEnrol() {
 }
 function addGood(c) { if (enrolImgs.length < MAX_REF) enrolImgs.push(c); renderEnrol(); }
 
+// Navbar tab: "model" (pre-trained), "ref" (reference images), "cad" (reference CAD, not built yet).
+// In "ref", sel is the chosen part type name or "__new" while enrolling.
+let tab = "model", sel = "";
+const SUBS = { model: "Pre-trained pump impeller classifier · Grad-CAM explanations",
+  ref: "Compare against your own good parts · no training needed", cad: "Build the reference from a CAD model" };
 async function loadProfiles(select) {
   try { profiles = await store("readonly", s => s.getAll()); } catch (e) { profiles = []; }
-  $("mode").innerHTML = `<option value="">Pump impeller (pre-trained model)</option>` +
-    profiles.map(p => `<option value="${encodeURIComponent(p.name)}">${p.name.replace(/</g, "&lt;")} (${p.count} good refs)</option>`).join("") +
-    `<option value="__new">+ New part type (show good parts)…</option>`;
-  $("mode").value = select ? encodeURIComponent(select) : "";
-  setMode();
+  if (select !== undefined) sel = select;
+  if (sel !== "__new" && !profiles.some(p => p.name === sel)) sel = profiles[0]?.name ?? "__new";
+  renderParts(); setMode();
+}
+function renderParts() {
+  $("parts").innerHTML = profiles.map(p => `<button class="chip glass${p.name === sel ? " on" : ""}" data-name="${encodeURIComponent(p.name)}">` +
+    `${p.name.replace(/</g, "&lt;")}<small>${p.count} refs</small></button>`).join("") +
+    `<button class="chip glass${sel === "__new" ? " on" : ""}" data-name="__new">+ New part</button>`;
 }
 function setMode() {
-  const v = $("mode").value;
-  $("enrol").hidden = v !== "__new";
-  active = v && v !== "__new" ? profiles.find(p => encodeURIComponent(p.name) === v) : null;
+  const ref = tab === "ref", enrolling = ref && sel === "__new";
+  $("refpanel").hidden = !ref; $("cadpanel").hidden = tab !== "cad"; $("enrol").hidden = !enrolling;
+  active = ref && !enrolling ? profiles.find(p => p.name === sel) ?? null : null;
   $("delprof").hidden = $("sens").hidden = !active;
   if (active) $("sensr").value = active.sens;
-  $("viewcap").textContent = active ? "Where it differs from good parts" : "Why it was flagged (Grad-CAM)";
-  btn.disabled = v === "__new" || !session;
-  if (v === "__new") { enrolImgs = []; renderEnrol(); verdict.className = ""; verdict.textContent = "Show good parts to create the reference"; }
-  else if (session) { verdict.className = ""; verdict.textContent = active ? `Ready: inspecting “${active.name}”` : "Ready: place part under camera"; }
+  $("viewcap").textContent = active ? "Difference map" : "Grad-CAM";
+  $("sub").textContent = SUBS[tab];
+  btn.disabled = enrolling || tab === "cad" || !session;
+  verdict.className = "";
+  if (enrolling) { renderEnrol(); verdict.textContent = "Show good parts to create the reference"; }
+  else if (tab === "cad") verdict.textContent = "CAD references are coming soon";
+  else if (session) verdict.textContent = active ? `Ready: inspecting “${active.name}”` : "Ready: place part under camera";
 }
+function setTab(t) {
+  tab = t;
+  document.querySelectorAll("#nav [data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  movePill(); setMode();
+}
+function movePill() {
+  const b = $("nav").querySelector(".on");
+  Object.assign($("navpill").style, { left: b.offsetLeft + "px", width: b.offsetWidth + "px" });
+}
+movePill(); document.fonts?.ready.then(movePill); addEventListener("resize", movePill);
 
-$("mode").onchange = setMode;
+$("nav").onclick = e => { const b = e.target.closest("[data-tab]"); if (b) setTab(b.dataset.tab); };
+$("parts").onclick = e => {
+  const b = e.target.closest("[data-name]"); if (!b) return;
+  sel = decodeURIComponent(b.dataset.name);
+  if (sel === "__new") { enrolImgs = []; $("pname").value = ""; }
+  renderParts(); setMode();
+};
 $("pname").oninput = renderEnrol;
 $("capgood").onclick = () => {
   if (!video.videoWidth) return alert("No camera feed. Use 'Upload photos'.");
@@ -313,14 +513,18 @@ $("upgood").onchange = async e => {
   }
   e.target.value = "";
 };
-$("cancel").onclick = () => { $("mode").value = ""; setMode(); };
+$("cancel").onclick = () => {
+  enrolImgs = [];
+  if (!profiles.length) return setTab("model");
+  sel = profiles[0].name; renderParts(); setMode();
+};
 $("finish").onclick = async () => {
   const name = $("pname").value.trim();
   $("finish").disabled = true;
   try {
     const p = await buildProfile(name, $("anyrot").checked, enrolImgs);
     await store("readwrite", s => s.put(p));
-    $("pname").value = ""; $("anyrot").checked = false;
+    $("pname").value = ""; $("anyrot").checked = false; enrolImgs = [];
     await loadProfiles(name);
   } catch (err) { console.error(err); verdict.textContent = "Could not save reference: " + err.message; $("finish").disabled = false; }
 };
@@ -331,12 +535,13 @@ $("delprof").onclick = async () => {
 };
 
 function renderHistory() {
+  $("histhead").hidden = !log.length;
   $("history").innerHTML = log.slice(0, 10).map((e, i) => {
     const thumb = `<img src="${e.img}" alt="">`;
     return `<li>${e.verdict !== "PASS" ? `<a href="${e.img}" download="flagged_${e.time.replace(/[:.]/g, "-")}.png" title="Save overlay">${thumb}</a>` : thumb}
       <span class="${{ PASS: "p", REJECT: "r", "NO MATCH": "n" }[e.verdict]}">${e.verdict}</span>
-      <span>${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : `p(defect) ${e.pDefect.toFixed(3)}`}</span><span style="margin-left:auto;color:var(--muted)">${new Date(e.time).toLocaleTimeString()}</span>
-      <button data-i="${i}">PDF</button></li>`;
+      <span class="m">${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : `p(defect) ${e.pDefect.toFixed(3)}`}<small>${new Date(e.time).toLocaleTimeString()}</small></span>
+      <button class="glass" data-i="${i}">PDF</button></li>`;
   }).join("");
 }
 
@@ -355,11 +560,12 @@ function reportHtml(e) {
   const jetBar = "linear-gradient(90deg,#00007f,#0000ff,#00ffff,#7fff7f,#ffff00,#ff0000,#7f0000)";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Inspection report ${id}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap">
 <style>
   :root { --ink:#141a24; --sub:#5b6474; --line:#e3e7ee; --panel:#f6f8fb; --navy:#0f1b2d; --accent:${accent}; --tint:${tint}; }
   * { box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   html { background:#e9edf2; }
-  body { margin:24px auto; max-width:820px; background:#fff; color:var(--ink); font:14px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  body { margin:24px auto; max-width:820px; background:#fff; color:var(--ink); font:14px/1.5 "Poppins", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
          box-shadow:0 10px 40px rgba(15,27,45,.12); border-radius:10px; overflow:hidden; }
   header { background:var(--navy); color:#fff; padding:22px 32px; display:flex; align-items:center; gap:16px; }
   header svg { flex:none; }
@@ -491,6 +697,7 @@ async function downloadReport(e) {
     await loaded;
     const d = f.contentDocument;
     await Promise.all([...d.images].map(i => i.decode().catch(() => {})));
+    await d.fonts?.ready;
     const canvas = await html2canvas(d.body, { scale: 2, backgroundColor: "#ffffff", windowWidth: 820 });
     f.remove();
     const pdf = new jspdf.jsPDF({ unit: "mm", format: "a4" }), PW = 210, PH = 297, M = 8, r = canvas.height / canvas.width;
@@ -514,7 +721,7 @@ btn.onclick = () => {
 };
 document.addEventListener("keydown", e => { if (e.code === "Space" && !btn.disabled) { e.preventDefault(); btn.click(); } });
 $("file").onchange = e => {
-  const f = e.target.files[0]; if (!f || !session) return;
+  const f = e.target.files[0]; if (!f || btn.disabled) return;
   const im = new Image();
   im.onload = () => { inspect(im, im.naturalWidth, im.naturalHeight); URL.revokeObjectURL(im.src); };
   im.src = URL.createObjectURL(f);
