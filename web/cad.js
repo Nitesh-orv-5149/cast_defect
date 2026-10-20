@@ -598,14 +598,44 @@ function decide(st, cfg) {
 
 // ---------------------------------------------------------------- reference-images tab: what kind of defect
 
+// Part mask for the reference-images tab, on any plain background: by colour on a coloured mat (segment), by
+// brightness on white, grey or black paper. null when no clean part/background split is found.
+function partMask(rgba, w, h) {
+  const N = w * h, G = new Float32Array(N), border = [];
+  let chroma = 0, nb = 0;
+  for (let p = 0; p < N; p++) G[p] = 0.299 * rgba[p * 4] + 0.587 * rgba[p * 4 + 1] + 0.114 * rgba[p * 4 + 2];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (x < 6 || y < 6 || x >= w - 6 || y >= h - 6) {
+    const p = y * w + x, r = rgba[p * 4], g = rgba[p * 4 + 1], b = rgba[p * 4 + 2];
+    border.push(p); chroma += (Math.max(r, g, b) - Math.min(r, g, b)) / (Math.max(r, g, b) + 1); nb++;
+  }
+  let M;
+  if (chroma / nb >= 0.12) M = segment(rgba, w, h);
+  else {
+    const Gb = blur(G, w, h, 1.5, 3), lb = quantile(border.map(p => Gb[p]), 0.5), u8 = new Uint8Array(N);
+    let mx = 1;
+    for (let p = 0; p < N; p++) mx = Math.max(mx, Math.abs(Gb[p] - lb));
+    for (let p = 0; p < N; p++) u8[p] = Math.round(255 * Math.abs(Gb[p] - lb) / mx);
+    const t = otsu(u8);
+    let m = close(open(u8.map(v => v > t ? 1 : 0), w, h, 5), w, h, 5);  // the opening drops ruled lines and paper texture
+    const cc = components(m, w, h, true);
+    if (cc.n < 1) return null;
+    let k = 1;
+    for (let j = 2; j <= cc.n; j++) if (cc.area[j] > cc.area[k]) k = j;
+    M = cc.lab.map(l => l === k ? 1 : 0);
+    const hc = components(enclosedBackground(M, w, h), w, h, false);
+    for (let p = 0; p < N; p++) if (hc.lab[p] && hc.area[hc.lab[p]] < 12) M[p] = 1;
+  }
+  let n = count(M), edge = 0;
+  for (let x = 0; x < w; x++) edge += M[x] + M[(h - 1) * w + x];
+  for (let y = 0; y < h; y++) edge += M[y * w] + M[y * w + w - 1];
+  return n < 0.03 * N || n > 0.85 * N || edge > 0.1 * 2 * (w + h) ? null : M;
+}
+
 // A good part kept at enrolment for typing: grey image, part mask (null without a coloured mat), centre and size
 function surfaceRef(rgba, w, h) {
   const N = w * h, G = new Uint8Array(N);
   for (let p = 0; p < N; p++) G[p] = Math.round(0.299 * rgba[p * 4] + 0.587 * rgba[p * 4 + 1] + 0.114 * rgba[p * 4 + 2]);
-  let M = segment(rgba, w, h), n = count(M), border = 0;
-  for (let x = 0; x < w; x++) border += M[x] + M[(h - 1) * w + x];
-  for (let y = 0; y < h; y++) border += M[y * w] + M[y * w + w - 1];
-  if (n < 0.03 * N || n > 0.85 * N || border > 0.1 * 2 * (w + h)) M = null;  // no usable part/background split
+  const M = partMask(rgba, w, h), n = M ? count(M) : 0;
   let cx = w / 2, cy = h / 2, r = 0.42 * Math.min(w, h);
   if (M) {
     let sx = 0, sy = 0;
@@ -822,6 +852,6 @@ if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScop
   };
 }
 
-const CAD = { segment, surfaceRef, typeSurface, loadCAD, parseSTL, parseOBJ, prepare, buildProfile, measure, decide, overlay, preview, FACES: Object.keys(FACES), DEFAULTS };
+const CAD = { segment, partMask, erode, surfaceRef, typeSurface, loadCAD, parseSTL, parseOBJ, prepare, buildProfile, measure, decide, overlay, preview, FACES: Object.keys(FACES), DEFAULTS };
 if (typeof module !== "undefined" && module.exports) module.exports = CAD; else root.CAD = CAD;
 })(typeof self !== "undefined" ? self : this);

@@ -631,6 +631,26 @@ async function nearest(q, bank, D) {
   return best;
 }
 const top10 = d => Float32Array.from(d).sort().slice(-10).reduce((a, b) => a + b, 0) / 10;
+// The background, and whatever shows through the part's holes, is painted one flat colour (the enrolled photos' typical
+// background) before the features are computed, in the enrolled photos and the inspected one alike: another table,
+// paper or shadow then can't look like a defect, while a new hole or a chip (background where good parts have metal)
+// and a filled hole (metal where they have background) still do.
+function bgColour(c, M) {
+  const px = c.getContext("2d").getImageData(0, 0, c.width, c.height).data, ch = [[], [], []];
+  for (let p = 0; p < M.length; p += 7) if (!M[p]) for (let k = 0; k < 3; k++) ch[k].push(px[4 * p + k]);
+  return ch.map(v => median(v));
+}
+function flatBg(c, M, rgb) {
+  if (!M) return c;
+  const E = CAD.erode(M, c.width, c.height, 5);  // edge pixels blend in the old background colour, so they are repainted too
+  const o = document.createElement("canvas"); o.width = c.width; o.height = c.height;
+  const g = o.getContext("2d"); g.drawImage(c, 0, 0);
+  const im = g.getImageData(0, 0, o.width, o.height);
+  for (let p = 0; p < E.length; p++) if (!E[p]) im.data.set(rgb, 4 * p);
+  g.putImageData(im, 0, 0);
+  return o;
+}
+const maskOf = c => window.CAD ? CAD.partMask(c.getContext("2d").getImageData(0, 0, c.width, c.height).data, c.width, c.height) : null;
 const median = d => Float32Array.from(d).sort()[d.length >> 1];
 function rot90(c, k) {
   const o = document.createElement("canvas"); o.width = o.height = c.width;
@@ -649,11 +669,14 @@ function capRows(rows, D, cap) {
 }
 const concat = (arrs) => { const o = new Float32Array(arrs.reduce((a, b) => a + b.length, 0)); let p = 0; for (const a of arrs) { o.set(a, p); p += a.length; } return o; };
 
-async function buildProfile(name, anyRot, imgs) {
-  await refModels();
-  const views = anyRot ? 4 : 1, per = [], plain = [];
+async function buildProfile(name, anyRot, photos) {
+  const imgs = photos.slice();  // photos still loading must not join half-way through
+  await Promise.all([refModels(), loadCadLib()]);
+  const masks = imgs.map(maskOf), cols = imgs.map((c, i) => masks[i] && bgColour(c, masks[i])).filter(Boolean);
+  const bgRGB = cols.length ? [0, 1, 2].map(k => median(cols.map(c => c[k]))) : null;
+  const views = anyRot ? 4 : 1, per = [], plain = [], flat = imgs.map((c, i) => bgRGB ? flatBg(c, masks[i], bgRGB) : c);
   let D;
-  for (const [i, c] of imgs.entries()) {
+  for (const [i, c] of flat.entries()) {
     verdict.textContent = `Learning good part ${i + 1} of ${imgs.length}…`;
     const vs = [];
     for (let k = 0; k < views; k++) { const p = await patchesOf(rot90(c, k)); D = p.D; vs.push(p.data); if (k === 0) plain.push(p.data); }
@@ -663,7 +686,7 @@ async function buildProfile(name, anyRot, imgs) {
   const cal = [], med = [];
   const calibrate = d => { cal.push(top10(d)); med.push(median(d)); };
   if (imgs.length === 1) {
-    const z = imgs[0], zc = document.createElement("canvas"); zc.width = zc.height = z.width;   // slightly zoomed re-view of the only part
+    const z = flat[0], zc = document.createElement("canvas"); zc.width = zc.height = z.width;   // slightly zoomed re-view of the only part
     zc.getContext("2d").drawImage(z, z.width * 0.04, z.width * 0.04, z.width * 0.92, z.width * 0.92, 0, 0, zc.width, zc.width);
     calibrate(await nearest((await patchesOf(zc)).data, capRows(per[0], D, BANK_CAP), D));
   } else {
@@ -674,15 +697,16 @@ async function buildProfile(name, anyRot, imgs) {
   }
   const thumbs = imgs.slice(0, 6).map(c => crop(c, c.width, c.height, 96).toDataURL("image/jpeg", 0.7));
   // a few good parts (grey + part mask) to compare against when typing a defect
-  await loadCadLib();
   const refs = imgs.slice(0, REF_KEEP).map(c => CAD.surfaceRef(c.getContext("2d").getImageData(0, 0, c.width, c.height).data, c.width, c.height));
   return { name, anyRot, D, bank: capRows(concat(per), D, BANK_CAP), cal: Math.max(...cal), calMed: Math.max(...med), sens: DEFAULT_SENS,
-           count: imgs.length, thumbs, refs, created: new Date().toISOString() };
+           count: imgs.length, thumbs, refs, bg: "flat", bgRGB, created: new Date().toISOString() };
 }
 
 async function inspectRef(raw, p) {
   await refModels();
-  const d = await nearest((await patchesOf(raw)).data, p.bank, p.D);
+  await loadCadLib();
+  const M = p.bg === "flat" && p.bgRGB ? maskOf(raw) : null;
+  const d = await nearest((await patchesOf(M ? flatBg(raw, M, p.bgRGB) : raw)).data, p.bank, p.D);
   const score = top10(d), thr = p.cal * p.sens;
   const v = median(d) > NO_MATCH * p.calMed ? "NO MATCH" : score > thr ? "REJECT" : "PASS";
   // what kind of defect: compare the flagged areas with the best-matching enrolled good part
@@ -693,10 +717,12 @@ async function inspectRef(raw, p) {
       .catch(err => { console.error(err); return []; });
   }
   const kinds = [...new Set(findings.map(f => f.defect))];
-  const detail = v === "NO MATCH" ? `Doesn't look like “${p.name}”. Check the part type and framing, then retry.`
+  const noSplit = p.bg === "flat" && p.bgRGB && !M ? " · couldn't separate the part from the background: use a plain background that contrasts with it (dark mat for bright parts)" : "";
+  const detail = v === "NO MATCH" ? `Doesn't look like “${p.name}”. Check the part type and framing, then retry.` + noSplit
     : (kinds.length ? `Likely ${kinds[0]}${kinds.length > 1 ? ` (also ${kinds.slice(1).join(", ")})` : ""} · ` : "") +
       `Anomaly score ${score.toFixed(2)} vs threshold ${thr.toFixed(2)} · ${p.count} good reference${p.count > 1 ? "s" : ""}` +
-      (v === "REJECT" ? (p.refs ? " · heat = areas unlike any good part" : " · re-save this reference to also get the defect type") : "");
+      (v === "REJECT" ? " · heat = areas unlike any good part" + noSplit : "") +
+      (p.bg !== "flat" ? " · saved with an older version: delete and re-add this part so the background and its holes are ignored" + (p.refs ? "" : " and defect types show") : "");
   return { mode: "ref", profile: p.name, refCount: p.count, score, thr, verdict: v, pDefect: Math.min(1, score / (2 * thr)), findings,
            map: d, H: 28, W: 28, lo: p.calMed, hi: Math.max(...d, thr), detail };  // colour from "typical good patch" up to the worst patch
 }
