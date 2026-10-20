@@ -52,33 +52,35 @@ async function geom(url) {
 }
 
 window.render = async p => {
+  // p.lightSeed (optional) fixes the station: lights, mat, exposure and casting material; p.seed still varies the part
   const R = mulberry(p.seed), U = (a, b) => a + (b - a) * R();
+  const RL = p.lightSeed != null ? mulberry(p.lightSeed) : R, UL = (a, b) => a + (b - a) * RL();
   const scene = new THREE.Scene();
-  scene.environment = env; scene.environmentIntensity = U(0.35, 0.9);
-  const hue = R() < 0.5 ? U(0.27, 0.40) : U(0.53, 0.62);
+  scene.environment = env; scene.environmentIntensity = UL(0.35, 0.9);
+  const hue = RL() < 0.5 ? UL(0.27, 0.40) : UL(0.53, 0.62);
   const mat = new THREE.Mesh(new THREE.PlaneGeometry(600, 600),
-    roughSurface(new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(hue, U(0.4, 0.75), U(0.16, 0.36)), roughness: 0.92 }),
+    roughSurface(new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(hue, UL(0.4, 0.75), UL(0.16, 0.36)), roughness: 0.92 }),
       { seed: U(0, 50), freq: 0.6, bump: 0.15, stain: 0 }));
   mat.receiveShadow = true; scene.add(mat);
   const g = await geom(p.stl);
-  const grey = U(0.3, 0.5);
-  const part = new THREE.Mesh(g, roughSurface(new THREE.MeshStandardMaterial({ color: new THREE.Color(grey, grey, grey * U(0.97, 1.03)),
-    metalness: U(0.45, 0.8), roughness: U(0.5, 0.8) }), { seed: U(0, 50), freq: U(1.2, 2.4), bump: U(0.25, 0.6), stain: p.stain ? U(0.6, 1) : 0 }));
+  const grey = UL(0.3, 0.5);
+  const part = new THREE.Mesh(g, roughSurface(new THREE.MeshStandardMaterial({ color: new THREE.Color(grey, grey, grey * UL(0.97, 1.03)),
+    metalness: UL(0.45, 0.8), roughness: UL(0.5, 0.8) }), { seed: U(0, 50), freq: U(1.2, 2.4), bump: U(0.25, 0.6), stain: p.stain ? U(0.6, 1) : 0 }));
   part.castShadow = part.receiveShadow = true;
   if (p.flip) { part.rotation.x = Math.PI; part.position.z = g.boundingBox.max.z; }
   const holder = new THREE.Group(); holder.add(part); holder.rotation.z = p.rot * Math.PI / 180;
   holder.position.set(p.tx, p.ty, 0.01); scene.add(holder);
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x404040, U(0.3, 0.8)));
-  const sun = new THREE.DirectionalLight(0xffffff, U(1.4, 3.2)), el = U(32, 75) * Math.PI / 180, az = U(0, 2 * Math.PI);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x404040, UL(0.3, 0.8)));
+  const sun = new THREE.DirectionalLight(0xffffff, UL(1.4, 3.2)), el = UL(32, 75) * Math.PI / 180, az = UL(0, 2 * Math.PI);
   sun.position.set(300 * Math.cos(el) * Math.cos(az), 300 * Math.cos(el) * Math.sin(az), 300 * Math.sin(el));
-  sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.radius = U(2, 6);
+  sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.radius = UL(2, 6);
   Object.assign(sun.shadow.camera, { left: -120, right: 120, top: 120, bottom: -120, near: 10, far: 800 });
   scene.add(sun);
   const cam = new THREE.PerspectiveCamera(35, 1, 10, 2000), t = p.tilt * Math.PI / 180, ca = p.tiltAz * Math.PI / 180;
   const target = new THREE.Vector3(0, 0, 4);
   cam.position.set(p.dist * Math.sin(t) * Math.cos(ca), p.dist * Math.sin(t) * Math.sin(ca), 4 + p.dist * Math.cos(t));
   cam.up.set(0, 1, 0); cam.lookAt(target);
-  renderer.toneMappingExposure = U(0.8, 1.2);
+  renderer.toneMappingExposure = UL(0.8, 1.2) * (p.lightSeed != null ? 0.97 + 0.06 * R() : 1);
   renderer.render(scene, cam);
   mat.geometry.dispose(); mat.material.dispose(); part.material.dispose();
   return renderer.domElement.toDataURL("image/png");

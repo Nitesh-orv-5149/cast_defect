@@ -399,6 +399,12 @@ async function inspect(src, w, h) {
     g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high";
     g.drawImage(hm, 0, 0, view.width, view.height);
   }
+  (r.mode === "ref" ? r.findings || [] : []).forEach((f, i) => {
+    const x = f.cx * view.width, y = f.cy * view.height;
+    g.lineWidth = 3; g.strokeStyle = "rgba(255,255,255,.95)"; g.beginPath(); g.arc(x, y, 22, 0, 2 * Math.PI); g.stroke();
+    g.fillStyle = "rgba(20,8,10,.85)"; g.beginPath(); g.arc(x + 22, y - 22, 11, 0, 2 * Math.PI); g.fill();
+    g.fillStyle = "#fff"; g.font = "600 13px Poppins, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(i + 1, x + 22, y - 22);
+  });
 
   verdict.className = { PASS: "pass", REJECT: "reject", "NO MATCH": "nomatch", "WRONG PART": "nomatch" }[r.verdict];
   verdict.innerHTML = `${r.verdict}<small>${r.detail}</small>`;
@@ -422,7 +428,7 @@ async function inspect(src, w, h) {
 
 // ---------- Reference mode: enrol good parts, flag patches that match none of them (PatchCore-style) ----------
 // NO_MATCH: a defect is a few odd patches; a different object is odd almost everywhere, so compare the median patch distance
-const MAX_REF = 20, BANK_CAP = 30000, CHUNK = 6000, CAL_MAX = 5, NO_MATCH = 1.35, DEFAULT_SENS = 1.0;
+const MAX_REF = 20, BANK_CAP = 30000, CHUNK = 6000, CAL_MAX = 5, NO_MATCH = 1.35, DEFAULT_SENS = 1.0, REF_KEEP = 6;
 let refBackbone, refNN, profiles = [], active = null, enrolImgs = [];
 
 // ---------- CAD mode: compare the photo with the CAD model (outline, designed holes, features; web/cad.js) ----------
@@ -608,8 +614,11 @@ async function buildProfile(name, anyRot, imgs) {
     }
   }
   const thumbs = imgs.slice(0, 6).map(c => crop(c, c.width, c.height, 96).toDataURL("image/jpeg", 0.7));
+  // a few good parts (grey + part mask) to compare against when typing a defect
+  await loadCadLib();
+  const refs = imgs.slice(0, REF_KEEP).map(c => CAD.surfaceRef(c.getContext("2d").getImageData(0, 0, c.width, c.height).data, c.width, c.height));
   return { name, anyRot, D, bank: capRows(concat(per), D, BANK_CAP), cal: Math.max(...cal), calMed: Math.max(...med), sens: DEFAULT_SENS,
-           count: imgs.length, thumbs, created: new Date().toISOString() };
+           count: imgs.length, thumbs, refs, created: new Date().toISOString() };
 }
 
 async function inspectRef(raw, p) {
@@ -617,10 +626,19 @@ async function inspectRef(raw, p) {
   const d = await nearest((await patchesOf(raw)).data, p.bank, p.D);
   const score = top10(d), thr = p.cal * p.sens;
   const v = median(d) > NO_MATCH * p.calMed ? "NO MATCH" : score > thr ? "REJECT" : "PASS";
+  // what kind of defect: compare the flagged areas with the best-matching enrolled good part
+  let findings = [];
+  if (v === "REJECT" && p.refs?.length) {
+    const px = raw.getContext("2d").getImageData(0, 0, raw.width, raw.height).data;
+    findings = await cadCall({ cmd: "surface", rgba: px, w: raw.width, h: raw.height, d: Float32Array.from(d), H: 28, W: 28, thr, refs: p.refs }, null, [px.buffer])
+      .catch(err => { console.error(err); return []; });
+  }
+  const kinds = [...new Set(findings.map(f => f.defect))];
   const detail = v === "NO MATCH" ? `Doesn't look like “${p.name}”. Check the part type and framing, then retry.`
-    : `Anomaly score ${score.toFixed(2)} vs threshold ${thr.toFixed(2)} · ${p.count} good reference${p.count > 1 ? "s" : ""}` +
-      (v === "REJECT" ? " · heat = areas unlike any good part" : "");
-  return { mode: "ref", profile: p.name, refCount: p.count, score, thr, verdict: v, pDefect: Math.min(1, score / (2 * thr)),
+    : (kinds.length ? `Likely ${kinds[0]}${kinds.length > 1 ? ` (also ${kinds.slice(1).join(", ")})` : ""} · ` : "") +
+      `Anomaly score ${score.toFixed(2)} vs threshold ${thr.toFixed(2)} · ${p.count} good reference${p.count > 1 ? "s" : ""}` +
+      (v === "REJECT" ? (p.refs ? " · heat = areas unlike any good part" : " · re-save this reference to also get the defect type") : "");
+  return { mode: "ref", profile: p.name, refCount: p.count, score, thr, verdict: v, pDefect: Math.min(1, score / (2 * thr)), findings,
            map: d, H: 28, W: 28, lo: p.calMed, hi: Math.max(...d, thr), detail };  // colour from "typical good patch" up to the worst patch
 }
 
@@ -776,7 +794,7 @@ function renderHistory() {
     const thumb = `<img src="${e.img}" alt="">`;
     return `<li>${e.verdict !== "PASS" ? `<a href="${e.img}" download="flagged_${e.time.replace(/[:.]/g, "-")}.png" title="Save overlay">${thumb}</a>` : thumb}
       <span class="${{ PASS: "p", REJECT: "r", "NO MATCH": "n" }[e.verdict]}">${e.verdict}</span>
-      <span class="m">${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : e.mode === "cad" ? `${e.part.replace(/</g, "&lt;")} · CAD` : `p(defect) ${e.pDefect.toFixed(3)}`}<small>${new Date(e.time).toLocaleTimeString()}</small></span>
+      <span class="m">${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : e.mode === "cad" ? `${e.part.replace(/</g, "&lt;")} · CAD` : `p(defect) ${e.pDefect.toFixed(3)}`}${e.verdict === "REJECT" && e.findings?.[0]?.defect ? ` · ${e.findings[0].defect.replace(/</g, "&lt;")}` : ""}<small>${new Date(e.time).toLocaleTimeString()}</small></span>
       <button class="glass" data-i="${i}">PDF</button></li>`;
   }).join("");
 }
@@ -795,7 +813,9 @@ function reportHtml(e) {
       : `The image does not resemble the enrolled “${e.profile}” parts. Check the part type, framing and lighting, then re-inspect.`)
     : "Release the part to the next operation. No defect evidence above the decision threshold.";
   const scoreTxt = cad ? (e.findings.length ? e.findings.map(f => esc(f.text)).join(" · ") : "outline and designed holes match the CAD") + (e.iou ? ` · outline match ${(e.iou * 100).toFixed(1)}%` : "")
-    : ref ? `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}` : `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
+    : ref ? (reject && e.findings?.length ? `likely ${esc(e.findings[0].defect)} · ` : "") + `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}` : `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
+  const typed = reject ? (e.findings || []).filter(f => f.defect) : [];
+  const where = f => f.cx == null ? "–" : (["Upper", "Middle", "Lower"][Math.min(2, Math.floor(f.cy * 3))] + "-" + ["left", "centre", "right"][Math.min(2, Math.floor(f.cx * 3))]).replace("Middle-centre", "Centre");
   const jetBar = "linear-gradient(90deg,#00007f,#0000ff,#00ffff,#7fff7f,#ffff00,#ff0000,#7f0000)";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Inspection report ${id}</title>
@@ -838,6 +858,8 @@ function reportHtml(e) {
   .legend span { flex:1; height:8px; border-radius:4px; background:${jetBar}; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   td { padding:8px 0; border-bottom:1px solid var(--line); vertical-align:top; } td:first-child { color:var(--sub); width:38%; }
+  .types th { text-align:left; font-size:11px; font-weight:600; color:var(--sub); text-transform:uppercase; letter-spacing:.8px; padding:6px 10px 6px 0; border-bottom:1px solid var(--line); }
+  .types td { padding-right:10px; } .types td:first-child { width:24px; }
   .action { border:1px solid var(--line); border-radius:8px; padding:14px 16px; display:flex; gap:12px; align-items:flex-start; }
   .action .dot { flex:none; width:10px; height:10px; border-radius:50%; background:var(--accent); margin-top:5px; }
   .sign { display:grid; grid-template-columns:repeat(3,1fr); gap:24px; margin-top:8px; }
@@ -875,6 +897,11 @@ function reportHtml(e) {
     <div><small>${flagged ? "Evidence zone" : "Evidence"}</small><b>${flagged ? (cad && nomatch ? "Whole part" : e.zone) : "None"}</b>${flagged && !cad ? `<br><span style="color:var(--sub)">${pct(e.coverage)} of surface</span>` : ""}</div>
   </div>
 
+  ${typed.length ? `<h3>Defect type${ref ? " (likely)" : ""}</h3>
+  <table class="types"><tr><th>#</th><th>Type</th><th>${cad ? "Size and evidence" : "Evidence"}</th>${ref ? "<th>Where</th>" : ""}</tr>
+    ${typed.map((f, i) => `<tr><td>${i + 1}</td><td><b>${esc(f.defect)}</b></td><td>${esc(cad ? f.text.slice(f.defect.length + 2) : f.why)}</td>${ref ? `<td>${where(f)}</td>` : ""}</tr>`).join("")}
+  </table>` : ""}
+
   <h3>Visual evidence</h3>
   <div class="imgs">
     <figure><img src="${e.raw}" alt="Captured part">
@@ -892,10 +919,12 @@ function reportHtml(e) {
   <table>
     ${cad ? `<tr><td>Decision rule</td><td>WRONG PART if the aligned outline matches the CAD less than 90%, the feature edges don't line up, or the hole pattern differs; REJECT if a designed hole is blocked, an opening ≥ 2 mm² appears where the CAD has none, or material ≥ 6 mm² is missing or extra beyond a 1 mm band</td></tr>
     <tr><td>Method</td><td>Photo aligned to perspective views rendered from the CAD of “${esc(e.part)}”; segmentation on a coloured mat; no training and no good-part photos</td></tr>
+    <tr><td>Defect type</td><td>From the finding's place and shape in mm: opening not in the CAD (round: blowhole, long and thin: crack), designed hole filled (core missing or blocked), material missing at the outline (chipped edge; large: misrun or broken), extra material (long strip: flash; compact: swell or lump)</td></tr>
     <tr><td>Limits</td><td>Checks what the outline and through-holes show. Surface defects (cracks, porosity) and changes to raised interior features are not judged in this mode.</td></tr>`
     : ref ? `<tr><td>Decision rule</td><td>REJECT if anomaly score &gt; ${e.thr.toFixed(2)} (set from the variation between enrolled good parts); NO MATCH when the typical patch difference exceeds ${NO_MATCH}× that of good parts</td></tr>
     <tr><td>Method</td><td>Reference comparison against ${e.refCount} enrolled good part${e.refCount > 1 ? "s" : ""} of “${e.profile.replace(/</g, "&lt;")}”: ImageNet ResNet18 patch features, no defect training</td></tr>
-    <tr><td>Explainability</td><td>Distance of each image patch to the most similar good-part patch (28×28 grid, upsampled)</td></tr>`
+    <tr><td>Explainability</td><td>Distance of each image patch to the most similar good-part patch (28×28 grid, upsampled)</td></tr>
+    <tr><td>Defect type</td><td>Flagged areas compared with the best-matching enrolled good part after aligning rotation and position: metal missing or added at the outline, holes opened or filled, new dark lines or pits. A likely type, not a measurement; confirm by eye.</td></tr>`
     : `<tr><td>Decision rule</td><td>REJECT if p(defect) &gt; ${THRESHOLD}</td></tr>
     <tr><td>Model</td><td>MobileNetV2 binary classifier (ok / defect), runs on-device</td></tr>
     <tr><td>Explainability</td><td>Grad-CAM on the final convolutional layer (7×7 grid, upsampled)</td></tr>`}
@@ -972,9 +1001,10 @@ $("file").onchange = e => {
 };
 $("export").onclick = () => {
   const q = s => `"${String(s ?? "").replace(/"/g, '""')}"`;
-  const csv = "time,part_type,verdict,p_defect,anomaly_score,threshold,findings\n" + log.map(e =>
+  const csv = "time,part_type,verdict,p_defect,anomaly_score,threshold,defect_type,findings\n" + log.map(e =>
     [e.time, q(e.mode === "ref" ? e.profile : e.mode === "cad" ? e.part + " (CAD)" : "Pump impeller (pre-trained)"), e.verdict,
      e.mode === "model" ? e.pDefect.toFixed(4) : "", e.score?.toFixed(4) ?? "", e.thr?.toFixed(4) ?? "",
+     q([...new Set((e.findings || []).filter(f => f.defect).map(f => f.defect))].join("; ")),
      q((e.findings || []).map(f => f.text).join("; "))].join(",")).join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));

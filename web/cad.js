@@ -466,7 +466,7 @@ function measure(prof, rgba, w, h) {
   const on = quantile(pick(P, interior), 0.5), off = quantile(pick(Gd, and(body, far)), 0.5) * 2 / Math.PI;
   let inter = 0, uni = 0;
   for (let p = 0; p < N; p++) { inter += pm[p] && tm[p]; uni += pm[p] || tm[p]; }
-  const st = { iou: inter / Math.max(uni, 1), featureRatio: on / Math.max(off, 1e-6), view: al.view, tilt: prof.views[al.view].tilt, W: al.W, size: S };
+  const st = { iou: inter / Math.max(uni, 1), featureRatio: on / Math.max(off, 1e-6), view: al.view, tilt: prof.views[al.view].tilt, W: al.W, size: S, ppm };
   const tol = Math.max(1, Math.round(ppm)), kt = 2 * tol + 1, ml = rd.mouth, mouth = ml.map(v => v ? 1 : 0);
   // designed through-holes: is background showing anywhere in the hole's mouth, about as much as the CAD predicts?
   const hc = components(th, S, S, false);
@@ -496,10 +496,51 @@ function measure(prof, rgba, w, h) {
 
 const DEFAULTS = { iouMin: 0.90, featureRatioMin: 1.45, patternMismatch: 0.5, holeOpenMin: 0.5, extraHoleMm2: 2.0, outlineMm2: 6.0, seeThroughMin: 0.45 };
 
-// Verdict plus findings; `mask` marks finding pixels in the template frame (for drawing)
+// Shape of every labelled component: area, ellipse-equivalent length/width (4 sigma along the principal axes) and how
+// much of that ellipse it fills. Units are pixels; callers convert with ppm.
+function shapes(lab, w) {
+  const acc = {};
+  for (let p = 0; p < lab.length; p++) {
+    const l = lab[p]; if (!l) continue;
+    const x = p % w, y = (p / w) | 0, a = acc[l] ||= [0, 0, 0, 0, 0, 0];
+    a[0]++; a[1] += x; a[2] += y; a[3] += x * x; a[4] += y * y; a[5] += x * y;
+  }
+  const out = {};
+  for (const [l, [n, sx, sy, sxx, syy, sxy]] of Object.entries(acc)) {
+    const mx = sx / n, my = sy / n, cxx = sxx / n - mx * mx + 1 / 12, cyy = syy / n - my * my + 1 / 12, cxy = sxy / n - mx * my;
+    const tr = (cxx + cyy) / 2, det = Math.sqrt(Math.max(0, tr * tr - (cxx * cyy - cxy * cxy)));
+    const len = 4 * Math.sqrt(tr + det), wid = 4 * Math.sqrt(Math.max(tr - det, 1 / 12));
+    out[l] = { n, cx: mx, cy: my, len, wid, fill: n / (Math.PI / 4 * len * wid) };
+  }
+  return out;
+}
+
+// Defect type from where the deviation sits (hole / outline) and its shape in mm. Foundry names, sizes in mm.
+function typeFinding(kind, sh, ppm, extra) {
+  const len = sh.len / ppm, wid = sh.wid / ppm, dia = 2 * Math.sqrt(sh.n / Math.PI) / ppm, el = sh.len / sh.wid;
+  if (kind === "unexpected_hole") {
+    // a narrow crack or a ragged void only shows the mat through in fragments; sh.parts counts them
+    if (el >= 3 && wid < 3) return { defect: "through crack", size: `~${len.toFixed(0)} mm long` };
+    if (sh.parts > 1 || (sh.fill < 0.6 && dia >= 3)) return { defect: "shrinkage cavity (through)", size: `~${len.toFixed(1)} × ${wid.toFixed(1)} mm` };
+    return { defect: dia < 2 ? "pinhole (through)" : "blowhole (through)", size: `Ø ${dia.toFixed(1)} mm` };
+  }
+  if (kind === "blocked_hole")
+    return extra.open < 0.15 ? { defect: "hole not formed (core missing or broken)", size: `Ø ${dia.toFixed(1)} mm hole` }
+      : { defect: "partly blocked hole (sand or flash in it)", size: `${Math.round(100 * (1 - extra.open))}% blocked` };
+  if (kind === "missing_material")
+    return sh.n / (ppm * ppm) >= 150 || len >= 25 ? { defect: "broken or unfilled section (misrun)", size: `~${len.toFixed(0)} × ${wid.toFixed(0)} mm` }
+      : { defect: "chipped edge", size: `~${len.toFixed(1)} × ${wid.toFixed(1)} mm` };
+  if (kind === "excess_material")
+    return el >= 4 && wid < 8 ? { defect: "flash / fin", size: `~${len.toFixed(0)} mm long, sticks out ~${wid.toFixed(1)} mm` }
+      : { defect: "extra metal (swell or lump)", size: `~${len.toFixed(1)} × ${wid.toFixed(1)} mm` };
+  return { defect: kind.replace(/_/g, " "), size: "" };
+}
+
+// Verdict plus typed findings; `mask` marks finding pixels in the template frame (for drawing)
 function decide(st, cfg) {
   cfg = { ...DEFAULTS, ...cfg };
   if (st.noPart) return { verdict: "NO PART", findings: [], mask: null, unchecked: 0 };
+  const ppm = st.ppm || 1;
   const S = st.size, mask = new Uint8Array(S * S), F = [];
   // A deep or off-axis hole may show almost no background from this camera position; it can't be checked for "blocked"
   const checkable = st.holes.filter(hh => hh.areaMm2 >= cfg.seeThroughMin * (hh.mouthMm2 || hh.areaMm2));
@@ -513,12 +554,218 @@ function decide(st, cfg) {
     return { verdict: "WRONG PART", findings: [{ type: "mismatch", text: why }], mask: null, unchecked };
   }
   const mark = (lab, label) => { for (let p = 0; p < lab.length; p++) if (lab[p] === label) mask[p] = 1; };
-  for (const hh of blocked) { F.push({ type: "blocked_hole", text: `designed hole blocked (${hh.areaMm2.toFixed(0)} mm²)` }); mark(st.holeLabels, hh.label); }
-  for (const c of extra) { F.push({ type: "unexpected_hole", text: `hole not in the CAD (${c.areaMm2.toFixed(1)} mm²)` }); mark(st.extra.lab, c.label); }
-  for (const c of st.missing.items.filter(c => c.areaMm2 >= cfg.outlineMm2)) { F.push({ type: "missing_material", text: `missing material (${c.areaMm2.toFixed(0)} mm²)` }); mark(st.missing.lab, c.label); }
-  for (const c of st.excess.items.filter(c => c.areaMm2 >= cfg.outlineMm2)) { F.push({ type: "excess_material", text: `extra material (${c.areaMm2.toFixed(0)} mm²)` }); mark(st.excess.lab, c.label); }
+  const add = (type, lab, sh, c, note, ex) => {
+    const t = typeFinding(type, sh[c.label], ppm, ex);
+    F.push({ type, defect: t.defect, size: t.size, areaMm2: +c.areaMm2.toFixed(1), text: `${t.defect}, ${t.size} (${note})` });
+    mark(lab, c.label);
+  };
+  const mouthSh = blocked.length ? shapes(st.holeLabels, S) : {};
+  for (const hh of blocked) add("blocked_hole", st.holeLabels, mouthSh, { label: hh.label, areaMm2: hh.mouthMm2 || hh.areaMm2 }, "designed hole", hh);
+  // Group see-through fragments within 2.5 mm of a flagged opening; the group's shape decides the type
+  if (extra.length) {
+    const keep = new Set(st.extra.items.filter(c => c.areaMm2 >= 0.3).map(c => c.label)), frag = st.extra.lab.map(l => keep.has(l) ? 1 : 0);
+    const k = 2 * Math.max(1, Math.round(2.5 * ppm)) + 1, cl = components(dilate(frag, S, S, k), S, S, true).lab;
+    const lab = new Int32Array(S * S), parts = {}, area = {};
+    for (let p = 0; p < S * S; p++) if (frag[p]) lab[p] = cl[p];
+    for (const c of st.extra.items) if (keep.has(c.label)) {
+      const p0 = st.extra.lab.indexOf(c.label), g = cl[p0];
+      parts[g] = (parts[g] || 0) + 1; area[g] = (area[g] || 0) + c.areaMm2;
+    }
+    const sh = shapes(lab, S), done = new Set();
+    for (const c of extra) {
+      const g = cl[st.extra.lab.indexOf(c.label)];
+      if (done.has(g)) continue;
+      done.add(g); sh[g].parts = parts[g];
+      add("unexpected_hole", lab, sh, { label: g, areaMm2: area[g] }, "hole not in the CAD");
+    }
+  }
+  const miss = st.missing.items.filter(c => c.areaMm2 >= cfg.outlineMm2), exc = st.excess.items.filter(c => c.areaMm2 >= cfg.outlineMm2);
+  const miSh = miss.length ? shapes(st.missing.lab, S) : {}, xsSh = exc.length ? shapes(st.excess.lab, S) : {};
+  for (const c of miss) add("missing_material", st.missing.lab, miSh, c, `${c.areaMm2.toFixed(0)} mm² missing vs CAD`);
+  for (const c of exc) {
+    // extra metal sitting in a designed hole's mouth is a hole that was not cored, even where the hole can't be seen through
+    let on = 0, n = 0;
+    for (let p = 0; p < S * S; p++) if (st.excess.lab[p] === c.label) { n++; on += st.holeLabels[p] ? 1 : 0; }
+    if (on >= 0.3 * n) add("blocked_hole", st.excess.lab, xsSh, c, `${c.areaMm2.toFixed(0)} mm² of metal in a designed hole`, { open: 0 });
+    else add("excess_material", st.excess.lab, xsSh, c, `${c.areaMm2.toFixed(0)} mm² extra vs CAD`);
+  }
+  F.sort((a, b) => b.areaMm2 - a.areaMm2);  // the biggest deviation leads
   return { verdict: F.length ? "REJECT" : "PASS", findings: F, mask, unchecked };
 }
+
+// ---------------------------------------------------------------- reference-images tab: what kind of defect
+
+// A good part kept at enrolment for typing: grey image, part mask (null without a coloured mat), centre and size
+function surfaceRef(rgba, w, h) {
+  const N = w * h, G = new Uint8Array(N);
+  for (let p = 0; p < N; p++) G[p] = Math.round(0.299 * rgba[p * 4] + 0.587 * rgba[p * 4 + 1] + 0.114 * rgba[p * 4 + 2]);
+  let M = segment(rgba, w, h), n = count(M), border = 0;
+  for (let x = 0; x < w; x++) border += M[x] + M[(h - 1) * w + x];
+  for (let y = 0; y < h; y++) border += M[y * w] + M[y * w + w - 1];
+  if (n < 0.03 * N || n > 0.85 * N || border > 0.1 * 2 * (w + h)) M = null;  // no usable part/background split
+  let cx = w / 2, cy = h / 2, r = 0.42 * Math.min(w, h);
+  if (M) {
+    let sx = 0, sy = 0;
+    for (let p = 0; p < N; p++) if (M[p]) { sx += p % w; sy += (p / w) | 0; }
+    cx = sx / n; cy = sy / n;
+    // size: median distance of the outer outline from the centre, so a chip or a fin barely moves it
+    const inner = enclosedBackground(M, w, h), ds = [];
+    for (let p = 0; p < N; p++) {
+      if (!M[p]) continue;
+      const x = p % w, y = (p / w) | 0;
+      if (x && y && x < w - 1 && y < h - 1 && (!M[p - 1] && !inner[p - 1] || !M[p + 1] && !inner[p + 1] || !M[p - w] && !inner[p - w] || !M[p + w] && !inner[p + w]))
+        ds.push(Math.hypot(x - cx, y - cy));
+    }
+    r = quantile(ds, 0.5) || r;
+  }
+  return { w, h, G, M, cx, cy, r };
+}
+
+// Ring-normalised polar samples (angle-major) for the rotation search: grey rings, then mask rings weighted up
+// so through-holes, which often break a part's symmetry, decide between near-equal rotations
+const NA = 360, NR = 40, NC = 2 * NR;
+function polar(ref) {
+  const P = new Float32Array(NA * NC);
+  for (let c = 0; c < 2; c++) for (let t = 0; t < NR; t++) {
+    let s = 0, q = 0;
+    for (let a = 0; a < NA; a++) {
+      const th = 2 * Math.PI * a / NA, rr = ref.r * (0.05 + 1.0 * t / NR), x = ref.cx + rr * Math.cos(th), y = ref.cy + rr * Math.sin(th);
+      const v = c ? (ref.M ? 255 * (ref.M[Math.min(ref.h - 1, Math.max(0, Math.round(y))) * ref.w + Math.min(ref.w - 1, Math.max(0, Math.round(x)))] || 0) : 0) : sample(ref.G, ref.w, ref.h, x, y);
+      P[a * NC + c * NR + t] = v; s += v; q += v * v;
+    }
+    const m = s / NA, sd = Math.sqrt(Math.max(q / NA - m * m, 0)) + 8;
+    for (let a = 0; a < NA; a++) P[a * NC + c * NR + t] = (P[a * NC + c * NR + t] - m) / sd * (c ? 2 : 1);
+  }
+  return P;
+}
+
+// Rotation (radians) of ref onto test and the normalised match score
+function rotationOf(Pt, Pr) {
+  let best = -Infinity, bk = 0, nt = 0, nr = 0;
+  for (let i = 0; i < Pt.length; i++) { nt += Pt[i] * Pt[i]; nr += Pr[i] * Pr[i]; }
+  for (let k = 0; k < NA; k++) {
+    let s = 0;
+    for (let a = 0; a < NA; a++) { const o = a * NC, q = ((a + k) % NA) * NC; for (let t = 0; t < NC; t++) s += Pt[o + t] * Pr[q + t]; }
+    if (s > best) { best = s; bk = k; }
+  }
+  return { rot: 2 * Math.PI * bk / NA, score: best / Math.sqrt(nt * nr + 1e-9) };
+}
+
+// Ref grey and mask resampled into the test photo's frame (rotation about the centres, scale from part size)
+function warpRef(ref, test, rot, dx, dy) {
+  const { w, h } = test, N = w * h, G = new Float32Array(N), M = new Uint8Array(N), s = ref.r / test.r, c = Math.cos(rot), sn = Math.sin(rot);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const u = x - test.cx - dx, v = y - test.cy - dy, X = ref.cx + s * (c * u - sn * v), Y = ref.cy + s * (sn * u + c * v), p = y * w + x;
+    G[p] = sample(ref.G, ref.w, ref.h, X, Y);
+    const xi = Math.round(X), yi = Math.round(Y);
+    M[p] = ref.M && xi >= 0 && yi >= 0 && xi < ref.w && yi < ref.h ? ref.M[yi * ref.w + xi] : 0;
+  }
+  return { G, M };
+}
+
+// Likely defect type for the hottest areas of a patch anomaly map d (H x W cells over the w x h photo), read from
+// how the photo differs from the best-matching good reference inside each area.
+function typeSurface(rgba, w, h, d, H, W, thr, refs) {
+  if (!refs || !refs.length) return [];
+  const N = w * h, test = surfaceRef(rgba, w, h), Pt = polar(test);
+  // best reference by rotation match, then a small shift search on the masks
+  let bestRef = null, best = { score: -Infinity };
+  for (const ref of refs) {
+    if (!!ref.M !== !!test.M) continue;
+    const r = rotationOf(Pt, ref.P ||= polar(ref));
+    if (r.score > best.score) { best = r; bestRef = ref; }
+  }
+  if (!bestRef) return [];
+  let dx = 0, dy = 0;
+  if (test.M) {
+    let top = -1;
+    for (let oy = -4; oy <= 4; oy += 2) for (let ox = -4; ox <= 4; ox += 2) {
+      const wr = warpRef(bestRef, { ...test, w: w >> 2, h: h >> 2, cx: test.cx / 4, cy: test.cy / 4, r: test.r / 4 }, best.rot, ox / 4, oy / 4);
+      let a = 0;
+      for (let y = 0; y < h >> 2; y++) for (let x = 0; x < w >> 2; x++) { const tm = test.M[(4 * y) * w + 4 * x]; a += tm === wr.M[y * (w >> 2) + x] ? 1 : 0; }
+      if (a > top) { top = a; dx = ox; dy = oy; }
+    }
+  }
+  const R = warpRef(bestRef, test, best.rot, dx, dy), Gt = blur(Float32Array.from(test.G), w, h, 1.2), Gr = blur(R.G, w, h, 1.2);
+  const Mt = test.M || new Uint8Array(N).fill(1), Mr = test.M ? R.M : Mt;
+  // match brightness on the shared part area, then signed differences
+  const both = erode(and(Mt, Mr), w, h, 5), vt = pick(Gt, both), vr = pick(Gr, both);
+  const mt = quantile(vt, 0.5), mr = quantile(vr, 0.5), st_ = quantile(vt.map(v => Math.abs(v - mt)), 0.5) + 1, sr = quantile(vr.map(v => Math.abs(v - mr)), 0.5) + 1;
+  const diff = new Float32Array(N);
+  for (let p = 0; p < N; p++) diff[p] = both[p] ? (Gt[p] - mt) / st_ - (Gr[p] - mr) / sr : 0;
+  const noise = quantile(pick(diff, both).map(Math.abs), 0.9) + 1e-6;
+  const newDark = open(both.map((v, p) => v && diff[p] < -2.2 * noise ? 1 : 0), w, h, 2), lostDark = open(both.map((v, p) => v && diff[p] > 2.2 * noise ? 1 : 0), w, h, 2);
+  const lost = open(and(Mr, not(Mt)), w, h, 5), gained = open(and(Mt, not(Mr)), w, h, 5);
+  const holesT = test.M ? enclosedBackground(Mt, w, h) : new Uint8Array(N), holesR = test.M ? dilate(enclosedBackground(Mr, w, h), w, h, 5) : new Uint8Array(N);
+  const partPx = count(Mt), out = [];
+  const add = (defect, why, cx, cy, score) => out.push({ type: "surface", defect, why, cx, cy, score, text: `likely ${defect} (${why})` });
+  // areas: connected hot cells around the strongest peaks
+  let peak = 0;
+  for (let j = 1; j < d.length; j++) if (d[j] > d[peak]) peak = j;
+  const hot = new Uint8Array(H * W);
+  for (let j = 0; j < d.length; j++) hot[j] = d[j] >= Math.max(0.85 * thr, 0.8 * d[peak]) ? 1 : 0;
+  const cc = components(hot, W, H, true), bestCell = {};
+  for (let j = 0; j < d.length; j++) { const l = cc.lab[j]; if (l && (!bestCell[l] || d[j] > d[bestCell[l]])) bestCell[l] = j; }
+  const areas = Object.entries(bestCell).map(([l, j]) => ({ l: +l, j, v: d[j] })).filter(a => a.v >= 0.92 * d[peak] || a.l === cc.lab[peak])
+    .sort((a, b) => b.v - a.v).slice(0, 3);
+  const cw = w / W, ch = h / H;
+  for (const a of areas) {
+    const Rc = new Uint8Array(N);
+    for (let j = 0; j < d.length; j++) if (cc.lab[j] === a.l) {
+      const x0 = Math.floor((j % W) * cw), y0 = Math.floor(((j / W) | 0) * ch);
+      for (let y = y0; y < Math.min(h, Math.ceil(y0 + ch)); y++) for (let x = x0; x < Math.min(w, Math.ceil(x0 + cw)); x++) Rc[y * w + x] = 1;
+    }
+    const Rd = dilate(Rc, w, h, 2 * Math.round(cw) + 1), cx = ((a.j % W) + 0.5) / W, cy = (((a.j / W) | 0) + 0.5) / H;
+    const inR = m => { let n = 0; for (let p = 0; p < N; p++) n += m[p] && Rd[p] ? 1 : 0; return n; };
+    const nLost = inR(lost), nGained = inR(gained), minPx = Math.max(12, partPx / 2000);
+    if (nLost >= minPx && nLost >= nGained) {
+      const opening = and(lost, holesT, Rd), nOpen = count(opening);
+      if (nOpen >= 0.5 * nLost) {
+        const sh = shapes(components(opening, w, h, true).lab, w), big = Object.values(sh).sort((x, y) => y.n - x.n)[0];
+        if (big.len / big.wid >= 3) add("through crack", "a slit shows the background where good parts are solid", cx, cy, a.v);
+        else add("blowhole (through)", "a hole where good parts are solid", cx, cy, a.v);
+      } else add(nLost >= 0.012 * partPx ? "broken or unfilled section (misrun)" : "chipped edge", "material missing at the outline", cx, cy, a.v);
+      continue;
+    }
+    if (nGained >= minPx) {
+      if (inR(and(gained, holesR)) >= 0.5 * nGained) add("blocked hole", "metal where good parts have a hole", cx, cy, a.v);
+      else {
+        const sh = Object.values(shapes(components(and(gained, Rd), w, h, true).lab, w)).sort((x, y) => y.n - x.n)[0];
+        add(sh.len / sh.wid >= 4 ? "flash / fin" : "extra metal (swell or lump)", "material beyond the good part's outline", cx, cy, a.v);
+      }
+      continue;
+    }
+    const nd = and(newDark, Rd), nDark = count(nd), nLostDark = inR(lostDark);
+    if (nLostDark >= Math.max(40, 0.8 * nDark)) { add("missing or deformed feature", "a feature the good parts have looks different or is gone", cx, cy, a.v); continue; }
+    if (nDark >= 8) {
+      // fragments of one mark within 3 px are measured together, so a crack broken up by texture still reads as a line
+      const grp = components(dilate(nd, w, h, 5), w, h, true).lab, gl = new Int32Array(N);
+      for (let p = 0; p < N; p++) if (nd[p]) gl[p] = grp[p];
+      const sh = Object.values(shapes(gl, w)).filter(s => s.n >= 6), line = sh.find(s => s.len >= w / 30 && s.len / s.wid >= 3.5);
+      const pits = sh.filter(s => s.len / s.wid < 2.5);
+      if (line) add("crack", "a thin dark line good parts don't have", cx, cy, a.v);
+      else if (pits.length >= 3) add("gas porosity", `${pits.length} small dark pits`, cx, cy, a.v);
+      else if (pits.length) add("blowhole / pit (surface)", "a dark pit good parts don't have", cx, cy, a.v);
+      else add("surface defect", "darker marks than on good parts (inclusion, scab or sand)", cx, cy, a.v);
+      continue;
+    }
+    add("surface anomaly", "texture unlike the good parts", cx, cy, a.v);
+  }
+  // a designed hole that is filled in, wherever the heat map peaked
+  if (test.M && !out.some(f => f.defect === "blocked hole")) {
+    const hr = components(enclosedBackground(Mr, w, h), w, h, false);
+    for (let l = 1; l <= hr.n; l++) {
+      if (hr.area[l] < 25) continue;
+      let filled = 0, sx = 0, sy = 0;
+      for (let p = 0; p < N; p++) if (hr.lab[p] === l) { if (Mt[p] && !dilate1(holesT, p, w, h)) filled++; sx += p % w; sy += (p / w) | 0; }
+      if (filled >= 0.6 * hr.area[l]) add("blocked hole", "a hole every good part has is filled", sx / hr.area[l] / w, sy / hr.area[l] / h, 0);
+    }
+  }
+  // a hole that is plainly filled or opened beats a texture-level guess
+  const rank = f => /blocked|through|chipped|misrun|flash|extra metal/.test(f.defect) ? 0 : 1;
+  return out.map((f, i) => [f, i]).sort((x, y) => rank(x[0]) - rank(y[0]) || x[1] - y[1]).map(x => x[0]);
+}
+const dilate1 = (m, p, w, h) => { const x = p % w, y = (p / w) | 0; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < w && yy < h && m[yy * w + xx]) return true; } return false; };
 
 // RGBA overlay in photo coordinates: CAD edges red, designed holes blue, findings filled; plus the findings' centroid
 function overlay(prof, st, findMask, w, h) {
@@ -565,11 +812,13 @@ if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScop
         const st = measure(prof, m.rgba, m.w, m.h), d = decide(st, m.cfg), ov = st.noPart ? null : overlay(prof, st, d.mask, m.w, m.h);
         self.postMessage({ id: m.id, result: { noPart: !!st.noPart, iou: st.iou, featureRatio: st.featureRatio, verdict: d.verdict, unchecked: d.unchecked,
           findings: d.findings, overlay: ov && ov.rgba, centroid: ov && ov.centroid } }, ov ? [ov.rgba.buffer] : []);
+      } else if (m.cmd === "surface") {
+        self.postMessage({ id: m.id, result: typeSurface(m.rgba, m.w, m.h, m.d, m.H, m.W, m.thr, m.refs) });
       } else if (m.cmd === "drop") { delete profiles[m.name]; self.postMessage({ id: m.id, result: true }); }
     } catch (err) { self.postMessage({ id: m.id, error: err.message || String(err) }); }
   };
 }
 
-const CAD = { segment, loadCAD, parseSTL, parseOBJ, prepare, buildProfile, measure, decide, overlay, preview, FACES: Object.keys(FACES), DEFAULTS };
+const CAD = { segment, surfaceRef, typeSurface, loadCAD, parseSTL, parseOBJ, prepare, buildProfile, measure, decide, overlay, preview, FACES: Object.keys(FACES), DEFAULTS };
 if (typeof module !== "undefined" && module.exports) module.exports = CAD; else root.CAD = CAD;
 })(typeof self !== "undefined" ? self : this);

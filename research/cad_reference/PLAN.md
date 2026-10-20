@@ -190,6 +190,57 @@ So the geometry layer generalises: anything that changes the **outline or the ho
 
 **Next (M0b):** fine defects need controlled light and/or good photos. Test (1) a ring/dome-light station (shading no longer depends on part rotation) with the CAD-only feature and stray checks, and (2) the surface layer: 5-10 enrolled good photos aligned to the CAD, position-aware comparison.
 
+## Defect types (both comparison tabs)
+
+A REJECT now also says **what kind of defect** it most likely is. No defect training data is needed in either tab.
+
+**Reference CAD tab (`decide()` in `web/cad.js`).** Each finding is typed from where it is relative to the CAD and its shape in mm. Shape is measured as ellipse-equivalent length and width plus how much of that ellipse the region fills, and see-through fragments within 2.5 mm are grouped.
+
+| Finding | Type |
+|---|---|
+| Opening not in the CAD | long and thin: through crack; ragged or in fragments: shrinkage cavity; otherwise: blowhole or pinhole (through), with Ø |
+| Designed hole filled, or metal in its mouth | hole not formed (core missing or broken); partly filled: partly blocked hole |
+| Material missing at the outline | chipped edge; ≥ 150 mm² or ≥ 25 mm long: broken or unfilled section (misrun) |
+| Extra material beyond the outline | long strip: flash / fin; compact: extra metal (swell or lump) |
+
+Results:
+- Validation photos, where the type of every detected defect is known: **139/139 right**. Through blowholes 46, blocked or uncored holes 47, chipped edges 46, across the impeller, bracket, housing and conrod.
+- New shapes (`make_types.py`, 32 photos):
+  - flash: 8/8;
+  - misrun: 8/8;
+  - through crack (1.6 mm slit): 4/8 detected, 2 of those called crack and 2 blowhole;
+  - shrinkage: 5/8 detected, all called blowhole, because only its round core shows the mat through.
+- Slits narrower than about 1.5 mm and protrusions under about 2 mm are below what the silhouette resolves.
+
+**Reference-images tab (`typeSurface()` in `web/cad.js`, runs in the worker).** The profile now keeps 6 of the enrolled good photos (grey image, part mask, centre, size). For a REJECT:
+1. The photo is matched to the best of those good photos. Rotation comes from a polar cross-correlation of grey and mask rings; the mask is weighted so through-holes pick between symmetric rotations. Scale comes from the outline radius, then a small shift search.
+2. Inside the hottest areas of the patch anomaly map, it reads the difference:
+   - metal lost: enclosed means through blowhole or crack, at the outline means chipped edge or misrun;
+   - metal gained: in a reference hole means blocked hole, beyond the outline means flash or swell;
+   - new dark line: crack;
+   - new dark pits: pit or porosity;
+   - dark structure the good part has but this one lacks: missing or deformed feature.
+3. A designed hole that is filled anywhere is reported even if the heat peaked elsewhere.
+
+Labelled "likely", with numbered markers on the heat map. Profiles saved before this change keep working without types. About 0.5 s in Node and 0.7 to 0.9 s in the browser worker per rejected photo.
+
+Station sets rendered with fixed lighting (`photo/make_type_jobs.mjs`, `lightSeed` in `photo/photo.html`). Anomaly maps come from the real app (`js/types_ref_maps.mjs`) and are scored with `js/types_ref.js`:
+
+| Set | Primary type right |
+|---|---|
+| Development station, impeller, 64 defects (tuned on) | 50/64 (78%) |
+| Blind station, impeller, new light and new parts | 24/32 (75%) |
+| Blind station, bracket (different casting, never tuned on) | 18/18 |
+
+Per type (development set):
+- blocked hole 8/8, broken blade 8/8, misrun 4/4, shrinkage 4/4;
+- through blowhole 7/8, chip 7/8, flash 3/4;
+- blind pits 5/8, through crack 1/4, crack 3/8.
+
+The anomaly peak sits on the true defect (from twin renders without the defect, `station_gt.py`) in 53 of 60 cases. Blocked holes were the exception at 2/8, which is why filled holes are also checked globally.
+
+Weak spot: hairline cracks. The 0.7 mm groove is about as dark as the sand texture, and pits and cracks get swapped. A low-angle light helps here more than any rule.
+
 ## Milestones
 
 | | Deliverable | Go / no-go |
