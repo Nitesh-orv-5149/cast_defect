@@ -221,6 +221,10 @@
     <span id="status" class="tag">Loading</span>
   </header>
 
+  <section id="modelpanel" class="panel glass">
+    <div class="phead"><h2>What are you photographing?</h2></div>
+    <div id="mmode"><button class="chip glass on" data-m="closeup">Close-up of a defect<small>names the type</small></button><button class="chip glass" data-m="whole">Whole impeller<small>defect / OK</small></button></div>
+  </section>
   <section id="refpanel" class="panel glass" hidden>
     <div class="phead"><h2>Part types</h2><button id="delprof" class="glass" hidden>Delete</button></div>
     <div id="parts"></div>
@@ -301,6 +305,13 @@ const $ = id => document.getElementById(id);
 const video = $("video"), view = $("view"), verdict = $("verdict"), btn = $("inspect");
 const log = [];
 let session, meta, nextId = 1;
+// Tab 1 has two models: the close-up defect-type classifier (types.onnx) and the whole-impeller defect/OK model
+let mmode = "closeup", typesSession, typesMeta;
+try { mmode = localStorage.getItem("mmode") || "closeup"; } catch (e) {}
+const TYPE_NAMES = { gas: "gas porosity / blowhole", shrinkage: "shrinkage cavity", crack: "crack", misrun: "misrun / cold shut",
+  flash_burr: "flash / burr", mould_surface: "mould or sand defect (scar, inclusion)", scratch: "scratch or handling mark", good: "good surface" };
+const loadTypes = () => typesSession ? Promise.resolve() : Promise.all([fetch("types.json").then(r => r.json()),
+  ort.InferenceSession.create("types.onnx", { executionProviders: ["wasm"] })]).then(([m, s]) => { typesMeta = m; typesSession = s; });
 try { nextId = +localStorage.getItem("reportId") || 1; } catch (e) {}
 
 const jet = v => [1.5 - Math.abs(4 * v - 3), 1.5 - Math.abs(4 * v - 2), 1.5 - Math.abs(4 * v - 1)]
@@ -365,11 +376,13 @@ function crop(src, w, h, n) {
 }
 
 // Canvas -> normalised CHW float tensor data at the model's input size
-function toTensor(c) {
-  const n = meta.size, px = crop(c, c.width, c.height, n).getContext("2d").getImageData(0, 0, n, n).data;
+function toTensor(c, m = meta) {
+  const n = m.size, px = crop(c, c.width, c.height, n).getContext("2d").getImageData(0, 0, n, n).data;
   const x = new Float32Array(3 * n * n);
-  for (let i = 0; i < n * n; i++)
-    for (let c = 0; c < 3; c++) x[c * n * n + i] = (px[4 * i + c] / 255 - meta.mean[c]) / meta.std[c];
+  for (let i = 0; i < n * n; i++) {
+    const g = m.grayscale ? (0.299 * px[4 * i] + 0.587 * px[4 * i + 1] + 0.114 * px[4 * i + 2]) / 255 : 0;
+    for (let c = 0; c < 3; c++) x[c * n * n + i] = ((m.grayscale ? g : px[4 * i + c] / 255) - m.mean[c]) / m.std[c];
+  }
   return new ort.Tensor("float32", x, [1, 3, n, n]);
 }
 
@@ -388,11 +401,33 @@ async function inspectModel(raw) {
     detail: `${(conf * 100).toFixed(1)}% confidence` + (reject ? " · heat = regions that drove the defect call" : " · no defect evidence above threshold") };
 }
 
+// Close-up classifier: which defect type fills the frame, with a class activation map for that type
+async function inspectTypes(raw) {
+  await loadTypes();
+  const out = await typesSession.run({ input: toTensor(raw, typesMeta) }), P = out.probs.data, C = typesMeta.classes;
+  const gi = C.indexOf("good"), pDefect = 1 - P[gi];
+  const ranked = C.map((c, i) => [c, P[i]]).filter(([c]) => c !== "good").sort((a, b) => b[1] - a[1]);
+  const reject = pDefect > THRESHOLD, [top, pt] = ranked[0], k = C.indexOf(top);
+  const [, K, H, W] = out.features.dims, f = out.features.data, wts = typesMeta.cam_weights[k], map = new Float32Array(H * W);
+  for (let c = 0; c < K; c++) for (let j = 0; j < H * W; j++) map[j] += wts[c] * f[c * H * W + j];
+  let max = 0, peak = 0;
+  for (let j = 0; j < map.length; j++) { map[j] = Math.max(0, map[j]); if (map[j] > max) { max = map[j]; peak = j; } }
+  const pct = v => (v * 100).toFixed(0) + "%", share = pt / pDefect;  // how clearly the top type wins among defect types
+  const name = TYPE_NAMES[top] || top, second = ranked[1];
+  const findings = reject ? [{ type: "closeup", defect: name, why: `${pct(share)} of the defect probability${share < 0.55 ? `; could also be ${TYPE_NAMES[second[0]]}` : ""}`,
+    text: `likely ${name} (${pct(share)})`, cx: ((peak % W) + 0.5) / W, cy: ((peak / W | 0) + 0.5) / H }] : [];
+  const detail = reject ? `Likely ${name} · ${pct(share)} sure of the type${share < 0.55 ? `, could also be ${TYPE_NAMES[second[0]]}` : ""} · p(defect) ${pct(pDefect)}`
+    : `Looks like a good surface · p(defect) ${pct(pDefect)}`;
+  return { mode: "types", verdict: reject ? "REJECT" : "PASS", pDefect, defectType: reject ? name : null, typeShare: share, probs: Object.fromEntries(C.map((c, i) => [c, P[i]])),
+    findings, map, H, W, lo: 0, hi: max, detail: detail + (reject ? " · heat = where that type was seen" : "") };
+}
+
 async function inspect(src, w, h) {
   const raw = crop(src, w, h, view.width);
   verdict.className = ""; verdict.textContent = "Inspecting…"; $("fix").hidden = true;
   $("stage").classList.add("busy");
-  const r = await (tab === "cad" ? inspectCad(raw) : active ? inspectRef(raw, active) : inspectModel(raw)).finally(() => $("stage").classList.remove("busy"));
+  const r = await (tab === "cad" ? inspectCad(raw) : active ? inspectRef(raw, active) : mmode === "closeup" ? inspectTypes(raw) : inspectModel(raw))
+    .finally(() => $("stage").classList.remove("busy"));
   const { map, H, W, lo, hi } = r, flagged = r.verdict !== "PASS";
   const t = v => Math.min(1, Math.max(0, (v - lo) / (hi - lo || 1)));
 
@@ -690,24 +725,33 @@ function renderParts() {
     `${p.name.replace(/</g, "&lt;")}<small>${p.count} refs</small></button>`).join("") +
     `<button class="chip glass${sel === "__new" ? " on" : ""}" data-name="__new">+ New part</button>`;
 }
+$("mmode").onclick = e => {
+  const b = e.target.closest("[data-m]");
+  if (!b || b.dataset.m === mmode) return;
+  mmode = b.dataset.m;
+  try { localStorage.setItem("mmode", mmode); } catch (err) {}
+  if (mmode === "closeup") loadTypes().catch(console.error);
+  setMode();
+};
 function setMode() {
   $("fix").hidden = true;
   const ref = tab === "ref", enrolling = ref && sel === "__new";
-  $("refpanel").hidden = !ref; $("cadpanel").hidden = tab !== "cad"; $("enrol").hidden = !enrolling;
+  $("refpanel").hidden = !ref; $("cadpanel").hidden = tab !== "cad"; $("enrol").hidden = !enrolling; $("modelpanel").hidden = tab !== "model";
+  $("mmode").querySelectorAll(".chip").forEach(b => b.classList.toggle("on", b.dataset.m === mmode));
   active = ref && !enrolling ? profiles.find(p => p.name === sel) ?? null : null;
   $("delprof").hidden = $("sens").hidden = !active;
   if (active) $("sensr").value = active.sens;
   const cad = tab === "cad", cadNewPart = cad && cadSel === "__new", cadReady = cad && cadProf?.name === cadSel;
   $("cadnew").hidden = !cadNewPart; $("caddel").hidden = !cad || cadNewPart || !cadSel;
   if (cad && !cadNewPart && !cadReady) ensureCadProfile();
-  $("viewcap").textContent = cad ? "CAD overlay" : active ? "Difference map" : "Grad-CAM";
-  $("sub").textContent = SUBS[tab];
+  $("viewcap").textContent = cad ? "CAD overlay" : active ? "Difference map" : mmode === "closeup" ? "Type heat map" : "Grad-CAM";
+  $("sub").textContent = tab === "model" && mmode === "closeup" ? "Close-up defect-type classifier · fill the frame with the defect" : SUBS[tab];
   btn.disabled = enrolling || !session || (cad && !cadReady);
   verdict.className = "";
   if (enrolling) { renderEnrol(); verdict.textContent = "Show good parts to create the reference"; }
   else if (cadNewPart) verdict.textContent = "Choose a CAD file to create the reference";
   else if (cad) verdict.textContent = cadReady ? `Ready: inspecting “${cadSel}” against its CAD` : `Preparing “${cadSel}” from its CAD…`;
-  else if (session) verdict.textContent = active ? `Ready: inspecting “${active.name}”` : "Ready: place part under camera";
+  else if (session) verdict.textContent = active ? `Ready: inspecting “${active.name}”` : tab === "model" && mmode === "closeup" ? "Ready: fill the frame with the defect, about 2–5 cm away" : "Ready: place part under camera";
 }
 const TABS = ["model", "ref", "cad"], navBtns = [...$("nav").querySelectorAll(":scope > [data-tab]")];
 const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -819,7 +863,7 @@ function renderHistory() {
     const thumb = `<img src="${e.img}" alt="">`;
     return `<li>${e.verdict !== "PASS" ? `<a href="${e.img}" download="flagged_${e.time.replace(/[:.]/g, "-")}.png" title="Save overlay">${thumb}</a>` : thumb}
       <span class="${{ PASS: "p", REJECT: "r", "NO MATCH": "n" }[e.verdict]}">${e.verdict}</span>
-      <span class="m">${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : e.mode === "cad" ? `${e.part.replace(/</g, "&lt;")} · CAD` : `p(defect) ${e.pDefect.toFixed(3)}`}${e.verdict === "REJECT" && e.findings?.[0]?.defect ? ` · ${e.findings[0].defect.replace(/</g, "&lt;")}` : ""}<small>${new Date(e.time).toLocaleTimeString()}</small></span>
+      <span class="m">${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : e.mode === "cad" ? `${e.part.replace(/</g, "&lt;")} · CAD` : `${e.mode === "types" ? "close-up · " : ""}p(defect) ${e.pDefect.toFixed(3)}`}${e.verdict === "REJECT" && e.findings?.[0]?.defect ? ` · ${e.findings[0].defect.replace(/</g, "&lt;")}` : ""}<small>${new Date(e.time).toLocaleTimeString()}</small></span>
       <button class="glass" data-i="${i}">PDF</button></li>`;
   }).join("");
 }
@@ -827,7 +871,7 @@ function renderHistory() {
 // Self-contained HTML report (images embedded as data URLs). Open it and Print -> Save as PDF.
 function reportHtml(e) {
   const reject = e.verdict === "REJECT", nomatch = e.verdict === "NO MATCH" || e.verdict === "WRONG PART", flagged = reject || nomatch;
-  const ref = e.mode === "ref", cad = e.mode === "cad", esc = v => String(v).replace(/</g, "&lt;");
+  const ref = e.mode === "ref", cad = e.mode === "cad", types = e.mode === "types", esc = v => String(v).replace(/</g, "&lt;");
   const conf = reject ? e.pDefect : 1 - e.pDefect;
   const id = "PART-" + String(e.id).padStart(5, "0"), doc = "QC-" + e.time.slice(0, 10).replace(/-/g, "") + "-" + String(e.id).padStart(5, "0");
   const when = new Date(e.time), pct = v => (v * 100).toFixed(1) + "%";
@@ -838,7 +882,8 @@ function reportHtml(e) {
       : `The image does not resemble the enrolled “${e.profile}” parts. Check the part type, framing and lighting, then re-inspect.`)
     : "Release the part to the next operation. No defect evidence above the decision threshold.";
   const scoreTxt = cad ? (e.findings.length ? e.findings.map(f => esc(f.text)).join(" · ") : "outline and designed holes match the CAD") + (e.iou ? ` · outline match ${(e.iou * 100).toFixed(1)}%` : "")
-    : ref ? (reject && e.findings?.length ? `likely ${esc(e.findings[0].defect)} · ` : "") + `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}` : `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
+    : ref ? (reject && e.findings?.length ? `likely ${esc(e.findings[0].defect)} · ` : "") + `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}`
+    : (types && reject ? `likely ${esc(e.defectType)} (${pct(e.typeShare)} of the defect probability) · ` : "") + `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
   const typed = reject ? (e.findings || []).filter(f => f.defect) : [];
   const fixes = (e.fixes || []).map(k => REMEDIES.find(x => x.key === k)).filter(Boolean).slice(0, 3);
   const where = f => f.cx == null ? "–" : (["Upper", "Middle", "Lower"][Math.min(2, Math.floor(f.cy * 3))] + "-" + ["left", "centre", "right"][Math.min(2, Math.floor(f.cx * 3))]).replace("Middle-centre", "Centre");
@@ -930,7 +975,7 @@ function reportHtml(e) {
     <div><small>${flagged ? "Evidence zone" : "Evidence"}</small><b>${flagged ? (cad && nomatch ? "Whole part" : e.zone) : "None"}</b>${flagged && !cad ? `<br><span style="color:var(--sub)">${pct(e.coverage)} of surface</span>` : ""}</div>
   </div>
 
-  ${typed.length ? `<h3>Defect type${ref ? " (likely)" : ""}</h3>
+  ${typed.length ? `<h3>Defect type${ref || types ? " (likely)" : ""}</h3>
   <table class="types"><tr><th>#</th><th>Type</th><th>${cad ? "Size and evidence" : "Evidence"}</th>${ref ? "<th>Where</th>" : ""}</tr>
     ${typed.map((f, i) => `<tr><td>${i + 1}</td><td><b>${esc(f.defect)}</b></td><td>${esc(cad ? f.text.slice(f.defect.length + 2) : f.why)}</td>${ref ? `<td>${where(f)}</td>` : ""}</tr>`).join("")}
   </table>` : ""}
@@ -941,7 +986,7 @@ function reportHtml(e) {
       <figcaption><b>Captured image</b>Centre-cropped frame as seen by the model</figcaption></figure>
     <figure>${flagged || cad ? `<img src="${e.img}" alt="${cad ? "CAD overlay" : "Heatmap overlay"}">` : `<div class="none"><b>✓ Clean</b>No region exceeded the defect threshold, so no heatmap is drawn.</div>`}
       <figcaption>${cad ? `<b>CAD overlay</b>Red lines: CAD edges after aligning the photo to the CAD. Blue: designed through-holes. Filled red: findings.`
-        : `<b>${ref ? "Difference from good parts" : "Grad-CAM explanation"}</b>${flagged ? `${ref ? "Highlighted areas look unlike any enrolled good part" : "Highlighted areas drove the defect decision"}
+        : `<b>${ref ? "Difference from good parts" : types ? "Where the defect type was seen" : "Grad-CAM explanation"}</b>${flagged ? `${ref ? "Highlighted areas look unlike any enrolled good part" : "Highlighted areas drove the defect decision"}
         <div class="legend">Low<span></span>High ${ref ? "difference" : "influence"}</div>` : "Heatmap shown only for flagged parts"}`}</figcaption></figure>
   </div>
 
@@ -958,6 +1003,10 @@ function reportHtml(e) {
     <tr><td>Method</td><td>Reference comparison against ${e.refCount} enrolled good part${e.refCount > 1 ? "s" : ""} of “${e.profile.replace(/</g, "&lt;")}”: ImageNet ResNet18 patch features, no defect training</td></tr>
     <tr><td>Explainability</td><td>Distance of each image patch to the most similar good-part patch (28×28 grid, upsampled)</td></tr>
     <tr><td>Defect type</td><td>Flagged areas compared with the best-matching enrolled good part after aligning rotation and position: metal missing or added at the outline, holes opened or filled, new dark lines or pits. A likely type, not a measurement; confirm by eye.</td></tr>`
+    : types ? `<tr><td>Decision rule</td><td>REJECT if p(defect) = 1 − p(good surface) &gt; ${THRESHOLD}; the type is the most likely defect class</td></tr>
+    <tr><td>Model</td><td>EfficientNet-B0 close-up classifier (gas porosity, shrinkage, crack, misrun, flash/burr, mould/sand defect, scratch, good), grayscale input, trained on real labelled close-ups of impeller castings; runs on-device</td></tr>
+    <tr><td>Explainability</td><td>Class activation map of the predicted type on the final convolutional layer</td></tr>
+    <tr><td>Limits</td><td>Trained on one product family (grayscale pump impellers). Treat the type as likely, not certain, and confirm by eye.</td></tr>`
     : `<tr><td>Decision rule</td><td>REJECT if p(defect) &gt; ${THRESHOLD}</td></tr>
     <tr><td>Model</td><td>MobileNetV2 binary classifier (ok / defect), runs on-device</td></tr>
     <tr><td>Explainability</td><td>Grad-CAM on the final convolutional layer (7×7 grid, upsampled)</td></tr>`}
@@ -1053,8 +1102,8 @@ $("file").onchange = e => {
 $("export").onclick = () => {
   const q = s => `"${String(s ?? "").replace(/"/g, '""')}"`;
   const csv = "time,part_type,verdict,p_defect,anomaly_score,threshold,defect_type,findings\n" + log.map(e =>
-    [e.time, q(e.mode === "ref" ? e.profile : e.mode === "cad" ? e.part + " (CAD)" : "Pump impeller (pre-trained)"), e.verdict,
-     e.mode === "model" ? e.pDefect.toFixed(4) : "", e.score?.toFixed(4) ?? "", e.thr?.toFixed(4) ?? "",
+    [e.time, q(e.mode === "ref" ? e.profile : e.mode === "cad" ? e.part + " (CAD)" : e.mode === "types" ? "Close-up (defect-type classifier)" : "Pump impeller (pre-trained)"), e.verdict,
+     e.mode === "model" || e.mode === "types" ? e.pDefect.toFixed(4) : "", e.score?.toFixed(4) ?? "", e.thr?.toFixed(4) ?? "",
      q([...new Set((e.findings || []).filter(f => f.defect).map(f => f.defect))].join("; ")),
      q((e.findings || []).map(f => f.text).join("; "))].join(",")).join("\n");
   const a = document.createElement("a");
