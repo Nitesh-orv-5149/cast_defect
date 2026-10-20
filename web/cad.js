@@ -466,7 +466,8 @@ function measure(prof, rgba, w, h) {
   const on = quantile(pick(P, interior), 0.5), off = quantile(pick(Gd, and(body, far)), 0.5) * 2 / Math.PI;
   let inter = 0, uni = 0;
   for (let p = 0; p < N; p++) { inter += pm[p] && tm[p]; uni += pm[p] || tm[p]; }
-  const st = { iou: inter / Math.max(uni, 1), featureRatio: on / Math.max(off, 1e-6), view: al.view, tilt: prof.views[al.view].tilt, W: al.W, size: S, ppm };
+  const st = { iou: inter / Math.max(uni, 1), featureRatio: on / Math.max(off, 1e-6), view: al.view, tilt: prof.views[al.view].tilt, W: al.W, size: S, ppm,
+    partMm2: count(tm) * mm2 };
   const tol = Math.max(1, Math.round(ppm)), kt = 2 * tol + 1, ml = rd.mouth, mouth = ml.map(v => v ? 1 : 0);
   // designed through-holes: is background showing anywhere in the hole's mouth, about as much as the CAD predicts?
   const hc = components(th, S, S, false);
@@ -579,7 +580,9 @@ function decide(st, cfg) {
       add("unexpected_hole", lab, sh, { label: g, areaMm2: area[g] }, "hole not in the CAD");
     }
   }
-  const miss = st.missing.items.filter(c => c.areaMm2 >= cfg.outlineMm2), exc = st.excess.items.filter(c => c.areaMm2 >= cfg.outlineMm2);
+  // outline tolerance scales down for small parts (0.2% of the part's area, 2 mm² at least, never above outlineMm2)
+  const outlineMin = Math.min(cfg.outlineMm2, Math.max(2, 0.002 * (st.partMm2 || Infinity)));
+  const miss = st.missing.items.filter(c => c.areaMm2 >= outlineMin), exc = st.excess.items.filter(c => c.areaMm2 >= outlineMin);
   const miSh = miss.length ? shapes(st.missing.lab, S) : {}, xsSh = exc.length ? shapes(st.excess.lab, S) : {};
   for (const c of miss) add("missing_material", st.missing.lab, miSh, c, `${c.areaMm2.toFixed(0)} mm² missing vs CAD`);
   for (const c of exc) {
