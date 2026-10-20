@@ -170,6 +170,13 @@
   #history li .m { flex:1; display:flex; flex-wrap:wrap; justify-content:space-between; column-gap:10px; white-space:nowrap; }
   #history li .m small { color:var(--muted); font-size:12px; }
   #history li button { padding:6px 14px; font-size:12px; }
+  #fix { margin:12px 0 0; padding:18px 20px; border-radius:28px; }
+  #fix h2 { margin:0 0 4px; font-size:17px; font-weight:600; } #fix .why { margin:0 0 12px; color:var(--muted); font-size:13px; }
+  #fix .chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
+  #fix .cols { display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; }
+  #fix h3 { margin:0 0 6px; font-size:12px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--maroon-hi); }
+  #fix ul { margin:0; padding-left:18px; font-size:13px; line-height:1.5; color:#e6dadd; } #fix li + li { margin-top:4px; }
+  @media (max-width:760px) { #fix .cols { grid-template-columns:1fr; } }
   .r { color:var(--reject); font-weight:700; } .p { color:var(--pass); font-weight:700; } .n { color:var(--amber); font-weight:700; }
 
   @media (max-width:640px) {
@@ -279,11 +286,13 @@
     <button id="report" class="glass" hidden>PDF report</button>
     <button id="export" class="glass">Export CSV</button>
   </div>
+  <section id="fix" class="glass" hidden aria-live="polite"></section>
   <h2 class="sect" id="histhead" hidden>Recent inspections</h2>
   <ul id="history"></ul>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js" crossorigin="anonymous"></script>
+<script src="remedies.js"></script>
 <script>
 const THRESHOLD = 0.5;  // defect probability above this = REJECT. Tune on the shop floor.
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
@@ -381,7 +390,7 @@ async function inspectModel(raw) {
 
 async function inspect(src, w, h) {
   const raw = crop(src, w, h, view.width);
-  verdict.className = ""; verdict.textContent = "Inspecting…";
+  verdict.className = ""; verdict.textContent = "Inspecting…"; $("fix").hidden = true;
   $("stage").classList.add("busy");
   const r = await (tab === "cad" ? inspectCad(raw) : active ? inspectRef(raw, active) : inspectModel(raw)).finally(() => $("stage").classList.remove("busy"));
   const { map, H, W, lo, hi } = r, flagged = r.verdict !== "PASS";
@@ -408,6 +417,9 @@ async function inspect(src, w, h) {
 
   verdict.className = { PASS: "pass", REJECT: "reject", "NO MATCH": "nomatch", "WRONG PART": "nomatch" }[r.verdict];
   verdict.innerHTML = `${r.verdict}<small>${r.detail}</small>`;
+  // pre-written guidance for every defect type found (the pre-trained model gives no type, so general guidance)
+  r.fixes = r.verdict !== "REJECT" ? [] : [...new Set((r.mode === "model" ? ["defect"] : (r.findings || []).map(f => f.defect)).map(n => remedyFor(n)?.key).filter(Boolean))];
+  renderFix(r.fixes, 0);
   Object.assign($("viewtag"), { hidden: false, textContent: r.verdict, className: "tag end " + verdict.className });
   $("viewempty").hidden = true; $("legend").hidden = !flagged || !map; $("stage").classList.add("has-result");
   // Where the evidence sits (3x3 zone of the hottest cell, or of the CAD findings) and how much of the part it covers
@@ -424,6 +436,18 @@ async function inspect(src, w, h) {
   try { localStorage.setItem("reportId", nextId); } catch (e) {}
   $("report").hidden = false;
   renderHistory();
+}
+
+// "What to do" card: how to confirm the defect, likely causes, process fixes and what to do with this part
+function renderFix(keys, i) {
+  const box = $("fix"), all = keys.map(k => REMEDIES.find(x => x.key === k)), m = all[i];
+  box.hidden = !m;
+  if (!m) return;
+  const list = a => `<ul>${a.map(t => `<li>${t}</li>`).join("")}</ul>`;
+  box.innerHTML = `<h2>What to do: ${m.title}</h2><p class="why">${m.confirm}</p>` +
+    (all.length > 1 ? `<div class="chips">${all.map((x, j) => `<button class="chip glass${j === i ? " on" : ""}" data-i="${j}">${x.title}</button>`).join("")}</div>` : "") +
+    `<div class="cols"><div><h3>Likely causes</h3>${list(m.causes)}</div><div><h3>Fix the process</h3>${list(m.fixes)}</div><div><h3>This part</h3>${list(m.part)}</div></div>`;
+  box.querySelectorAll(".chip").forEach(b => b.onclick = () => renderFix(keys, +b.dataset.i));
 }
 
 // ---------- Reference mode: enrol good parts, flag patches that match none of them (PatchCore-style) ----------
@@ -667,6 +691,7 @@ function renderParts() {
     `<button class="chip glass${sel === "__new" ? " on" : ""}" data-name="__new">+ New part</button>`;
 }
 function setMode() {
+  $("fix").hidden = true;
   const ref = tab === "ref", enrolling = ref && sel === "__new";
   $("refpanel").hidden = !ref; $("cadpanel").hidden = tab !== "cad"; $("enrol").hidden = !enrolling;
   active = ref && !enrolling ? profiles.find(p => p.name === sel) ?? null : null;
@@ -815,6 +840,7 @@ function reportHtml(e) {
   const scoreTxt = cad ? (e.findings.length ? e.findings.map(f => esc(f.text)).join(" · ") : "outline and designed holes match the CAD") + (e.iou ? ` · outline match ${(e.iou * 100).toFixed(1)}%` : "")
     : ref ? (reject && e.findings?.length ? `likely ${esc(e.findings[0].defect)} · ` : "") + `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}` : `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
   const typed = reject ? (e.findings || []).filter(f => f.defect) : [];
+  const fixes = (e.fixes || []).map(k => REMEDIES.find(x => x.key === k)).filter(Boolean).slice(0, 3);
   const where = f => f.cx == null ? "–" : (["Upper", "Middle", "Lower"][Math.min(2, Math.floor(f.cy * 3))] + "-" + ["left", "centre", "right"][Math.min(2, Math.floor(f.cx * 3))]).replace("Middle-centre", "Centre");
   const jetBar = "linear-gradient(90deg,#00007f,#0000ff,#00ffff,#7fff7f,#ffff00,#ff0000,#7f0000)";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -861,6 +887,13 @@ function reportHtml(e) {
   .types th { text-align:left; font-size:11px; font-weight:600; color:var(--sub); text-transform:uppercase; letter-spacing:.8px; padding:6px 10px 6px 0; border-bottom:1px solid var(--line); }
   .types td { padding-right:10px; } .types td:first-child { width:24px; }
   .action { border:1px solid var(--line); border-radius:8px; padding:14px 16px; display:flex; gap:12px; align-items:flex-start; }
+  #plan { break-before:page; page-break-before:always; padding:28px 32px 24px; }
+  #plan h2 { margin:0 0 4px; font-size:20px; } #plan > p { margin:0 0 18px; color:var(--sub); font-size:13px; }
+  .fx { border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-bottom:14px; break-inside:avoid; }
+  .fx h4 { margin:0 0 4px; font-size:15px; } .fx > p { margin:0 0 10px; color:var(--sub); font-size:12.5px; }
+  .fx .cols { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .fx h5 { margin:0 0 6px; font-size:10.5px; letter-spacing:1.2px; text-transform:uppercase; color:var(--accent); }
+  .fx ul { margin:0; padding-left:16px; font-size:12.5px; line-height:1.45; } .fx li + li { margin-top:3px; }
   .action .dot { flex:none; width:10px; height:10px; border-radius:50%; background:var(--accent); margin-top:5px; }
   .sign { display:grid; grid-template-columns:repeat(3,1fr); gap:24px; margin-top:8px; }
   .sign div { border-top:1px solid var(--ink); padding-top:6px; font-size:11px; color:var(--sub); margin-top:36px; }
@@ -913,7 +946,7 @@ function reportHtml(e) {
   </div>
 
   <h3>Recommended action</h3>
-  <div class="action"><span class="dot"></span><div>${action}</div></div>
+  <div class="action"><span class="dot"></span><div>${action}${fixes.length ? " Likely causes and fixes are on the action plan page." : ""}</div></div>
 
   <h3>Inspection parameters</h3>
   <table>
@@ -935,6 +968,13 @@ function reportHtml(e) {
   <div class="sign"><div>Inspector</div><div>QC supervisor</div><div>Date</div></div>
 </main>
 <footer><span>Generated by Cast Inspector · AI-assisted decision, verify critical rejects manually</span><span>${doc}</span></footer>
+${fixes.length ? `<section id="plan">
+  <h2>Action plan</h2><p>${doc} · ${id} · general foundry guidance for the defect type${fixes.length > 1 ? "s" : ""} found; adapt to your process sheet and customer spec</p>
+  ${fixes.map(m => `<div class="fx"><h4>${m.title}</h4><p>${m.confirm}</p><div class="cols">
+    <div><h5>Likely causes</h5><ul>${m.causes.map(t => `<li>${t}</li>`).join("")}</ul></div>
+    <div><h5>Fix the process</h5><ul>${m.fixes.map(t => `<li>${t}</li>`).join("")}</ul></div>
+    <div><h5>This part</h5><ul>${m.part.map(t => `<li>${t}</li>`).join("")}</ul></div></div></div>`).join("")}
+</section>` : ""}
 </body></html>`;
 }
 // PDF libs load on first report only (then the service worker caches them for offline use)
@@ -953,7 +993,7 @@ function save(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 
-// Render the report in an off-screen iframe, rasterise it, and fit it onto one A4 page
+// Render the report in an off-screen iframe, rasterise it, and fit it onto one A4 page (action plan on a second page)
 async function downloadReport(e) {
   const t = new Date(e.time); t.setMinutes(t.getMinutes() - t.getTimezoneOffset());  // local time in the filename
   const name = `report_PART-${String(e.id).padStart(5, "0")}_${t.toISOString().slice(0, 19).replace(/[:T]/g, "-")}`;
@@ -970,13 +1010,24 @@ async function downloadReport(e) {
     const d = f.contentDocument;
     await Promise.all([...d.images].map(i => i.decode().catch(() => {})));
     await d.fonts?.ready;
-    const canvas = await html2canvas(d.body, { scale: 2, backgroundColor: "#ffffff", windowWidth: 820 });
+    const plan = d.getElementById("plan"), shot = () => html2canvas(d.body, { scale: 2, backgroundColor: "#ffffff", windowWidth: 820 });
+    if (plan) plan.style.display = "none";
+    const pages = [await shot()];
+    if (plan) {
+      const rest = [...d.body.children].filter(c => c !== plan);
+      rest.forEach(c => c.style.display = "none"); plan.style.display = "";
+      pages.push(await shot());
+    }
     f.remove();
-    const pdf = new jspdf.jsPDF({ unit: "mm", format: "a4" }), PW = 210, PH = 297, M = 8, r = canvas.height / canvas.width;
-    let w = PW - 2 * M, h = w * r;
-    if (h > PH - 2 * M) { h = PH - 2 * M; w = h / r; }
+    const pdf = new jspdf.jsPDF({ unit: "mm", format: "a4" }), PW = 210, PH = 297, M = 8;
     pdf.setProperties({ title: `Casting inspection report ${name}` });
-    pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", (PW - w) / 2, M, w, h);
+    pages.forEach((canvas, i) => {
+      const r = canvas.height / canvas.width;
+      let w = PW - 2 * M, h = w * r;
+      if (h > PH - 2 * M) { h = PH - 2 * M; w = h / r; }
+      if (i) pdf.addPage();
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", (PW - w) / 2, M, w, h);
+    });
     save(pdf.output("blob"), name + ".pdf");
   } catch (err) {
     console.error(err);
