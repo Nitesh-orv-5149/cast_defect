@@ -375,6 +375,30 @@ function crop(src, w, h, n) {
   return c;
 }
 
+// Square crop around the part, found on a small copy of the whole photo: a part that is off-centre or near the edge of
+// a gallery photo is not cut off, and every photo shows the part at the same size. Falls back to the centre crop.
+function framePart(src, w, h, n) {
+  if (!window.CAD) return crop(src, w, h, n);
+  const k = 256 / Math.max(w, h), sw = Math.max(8, Math.round(w * k)), sh = Math.max(8, Math.round(h * k));
+  const s = document.createElement("canvas"); s.width = sw; s.height = sh;
+  const sg = s.getContext("2d", { willReadFrequently: true }); sg.drawImage(src, 0, 0, sw, sh);
+  const px = sg.getImageData(0, 0, sw, sh).data, M = CAD.partMask(px, sw, sh, true);
+  if (!M) return crop(src, w, h, n);
+  let x0 = sw, y0 = sh, x1 = 0, y1 = 0;
+  for (let p = 0; p < M.length; p++) if (M[p]) { const x = p % sw, y = (p / sw) | 0; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  const side = 1.2 * Math.max(x1 - x0 + 1, y1 - y0 + 1) / k, cx = (x0 + x1 + 1) / 2 / k, cy = (y0 + y1 + 1) / 2 / k;
+  const ch = [[], [], []];
+  for (let x = 0; x < sw; x++) for (const y of [0, sh - 1]) for (let j = 0; j < 3; j++) ch[j].push(px[4 * (y * sw + x) + j]);
+  for (let y = 0; y < sh; y++) for (const x of [0, sw - 1]) for (let j = 0; j < 3; j++) ch[j].push(px[4 * (y * sw + x) + j]);
+  const c = document.createElement("canvas"); c.width = c.height = n;
+  const g = c.getContext("2d");
+  g.fillStyle = `rgb(${ch.map(v => v.sort((a, b) => a - b)[v.length >> 1]).join(",")})`; g.fillRect(0, 0, n, n);
+  g.drawImage(src, cx - side / 2, cy - side / 2, side, side, 0, 0, n, n);  // the parts of the square outside the photo stay background
+  return c;
+}
+// Tabs 2 and 3 compare whole parts, so they frame the part; the close-up and whole-impeller models keep the centre crop
+const grab = (src, w, h) => (tab === "ref" || tab === "cad") ? framePart(src, w, h, view.width) : crop(src, w, h, view.width);
+
 // Canvas -> normalised CHW float tensor data at the model's input size
 function toTensor(c, m = meta) {
   const n = m.size, px = crop(c, c.width, c.height, n).getContext("2d").getImageData(0, 0, n, n).data;
@@ -423,7 +447,8 @@ async function inspectTypes(raw) {
 }
 
 async function inspect(src, w, h) {
-  const raw = crop(src, w, h, view.width);
+  if (tab === "ref" || tab === "cad") await loadCadLib();
+  const raw = grab(src, w, h);
   verdict.className = ""; verdict.textContent = "Inspecting…"; $("fix").hidden = true;
   $("stage").classList.add("busy");
   const r = await (tab === "cad" ? inspectCad(raw) : active ? inspectRef(raw, active) : mmode === "closeup" ? inspectTypes(raw) : inspectModel(raw))
@@ -582,7 +607,9 @@ async function inspectCad(raw) {
   const S = raw.width, px = raw.getContext("2d").getImageData(0, 0, S, S).data, part = cadProf.name;
   const d = await cadCall({ cmd: "inspect", name: part, rgba: px, w: S, h: S }, null, [px.buffer]);
   if (d.noPart) return { mode: "cad", part, verdict: "NO MATCH", findings: [], pDefect: 1,
-    detail: "No part found: use a plain coloured mat (green or blue) and keep the whole part in view" };
+    detail: "No part found: use a plain background that contrasts with the part (coloured mat, or white paper for dark parts) and keep the whole part in view" };
+  if (d.tilted) return { mode: "cad", part, verdict: "NO MATCH", findings: [], pDefect: 1,
+    detail: "Part looks tilted: hold the phone straight above the part, with all of it in the frame, and retry" };
   const c = document.createElement("canvas");
   c.width = c.height = S; c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(d.overlay.buffer), S, S), 0, 0);
   const st = d, ov = { centroid: d.centroid };
@@ -708,7 +735,10 @@ async function inspectRef(raw, p) {
   const M = p.bg === "flat" && p.bgRGB ? maskOf(raw) : null;
   const d = await nearest((await patchesOf(M ? flatBg(raw, M, p.bgRGB) : raw)).data, p.bank, p.D);
   const score = top10(d), thr = p.cal * p.sens;
-  const v = median(d) > NO_MATCH * p.calMed ? "NO MATCH" : score > thr ? "REJECT" : "PASS";
+  // a tilted photo shows the part's side and hides part of its holes, which would read as defects: ask for a retake
+  const refAsp = (p.refs || []).filter(r => r.M).map(r => CAD.aspect(r.M, r.w)), Mv = M || maskOf(raw);
+  const tilted = refAsp.length && Mv && Math.abs(CAD.aspect(Mv, raw.width) - median(refAsp)) > 0.08;
+  const v = tilted || median(d) > NO_MATCH * p.calMed ? "NO MATCH" : score > thr ? "REJECT" : "PASS";
   // what kind of defect: compare the flagged areas with the best-matching enrolled good part
   let findings = [];
   if (v === "REJECT" && p.refs?.length) {
@@ -718,7 +748,8 @@ async function inspectRef(raw, p) {
   }
   const kinds = [...new Set(findings.map(f => f.defect))];
   const noSplit = p.bg === "flat" && p.bgRGB && !M ? " · couldn't separate the part from the background: use a plain background that contrasts with it (dark mat for bright parts)" : "";
-  const detail = v === "NO MATCH" ? `Doesn't look like “${p.name}”. Check the part type and framing, then retry.` + noSplit
+  const detail = tilted ? `Part looks tilted or cut off compared with the good photos. Hold the phone straight above the part, with all of it in the frame, and retry.`
+    : v === "NO MATCH" ? `Doesn't look like “${p.name}”. Check the part type and framing, then retry.` + noSplit
     : (kinds.length ? `Likely ${kinds[0]}${kinds.length > 1 ? ` (also ${kinds.slice(1).join(", ")})` : ""} · ` : "") +
       `Anomaly score ${score.toFixed(2)} vs threshold ${thr.toFixed(2)} · ${p.count} good reference${p.count > 1 ? "s" : ""}` +
       (v === "REJECT" ? " · heat = areas unlike any good part" + noSplit : "") +
@@ -852,14 +883,16 @@ $("parts").onclick = e => {
   renderParts(); setMode();
 };
 $("pname").oninput = renderEnrol;
-$("capgood").onclick = () => {
+$("capgood").onclick = async () => {
   if (!video.videoWidth) return askCamera();
-  addGood(crop(video, video.videoWidth, video.videoHeight, view.width));
+  await loadCadLib();
+  addGood(grab(video, video.videoWidth, video.videoHeight));
 };
 $("upgood").onchange = async e => {
+  await loadCadLib();
   for (const f of [...e.target.files].slice(0, MAX_REF - enrolImgs.length)) {
     const im = new Image(); im.src = URL.createObjectURL(f); await im.decode();
-    addGood(crop(im, im.naturalWidth, im.naturalHeight, view.width)); URL.revokeObjectURL(im.src);
+    addGood(grab(im, im.naturalWidth, im.naturalHeight)); URL.revokeObjectURL(im.src);
   }
   e.target.value = "";
 };
