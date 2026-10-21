@@ -57,9 +57,10 @@ window.render = async p => {
   const RL = p.lightSeed != null ? mulberry(p.lightSeed) : R, UL = (a, b) => a + (b - a) * RL();
   const scene = new THREE.Scene();
   scene.environment = env; scene.environmentIntensity = UL(0.35, 0.9);
-  const hue = RL() < 0.5 ? UL(0.27, 0.40) : UL(0.53, 0.62);
+  // p.mat = [h, s, l] (optional) swaps only the background colour, with lights and casting unchanged
+  const hue = RL() < 0.5 ? UL(0.27, 0.40) : UL(0.53, 0.62), sat = UL(0.4, 0.75), lig = UL(0.16, 0.36);
   const mat = new THREE.Mesh(new THREE.PlaneGeometry(600, 600),
-    roughSurface(new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(hue, UL(0.4, 0.75), UL(0.16, 0.36)), roughness: 0.92 }),
+    roughSurface(new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(...(p.mat || [hue, sat, lig])), roughness: 0.92 }),
       { seed: U(0, 50), freq: 0.6, bump: 0.15, stain: 0 }));
   mat.receiveShadow = true; scene.add(mat);
   const g = await geom(p.stl);

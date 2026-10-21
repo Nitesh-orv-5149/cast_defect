@@ -446,10 +446,13 @@ function solve6(H, g) {  // Gaussian elimination with partial pivoting
 // ---------------------------------------------------------------- measurements and decision
 
 function measure(prof, rgba, w, h) {
-  const mask = segment(rgba, w, h);
+  const mask = partMask(rgba, w, h) || segment(rgba, w, h);  // coloured mat, or plain paper / table
   if (count(mask) < 500) return { noPart: true };
   const al = align(prof, mask, w, h), S = prof.size, N = S * S, ppm = prof.ppm, mm2 = 1 / (ppm * ppm);
   const rd = prof.views[al.view].rd, tm = rd.mask, th = rd.holes, te = rd.edges;
+  // a photo tilted beyond the templates' 18 degrees can be squeezed to fit by the affine alignment, but its holes are
+  // then partly hidden and would read as blocked: compare the outline's elongation before alignment
+  if (Math.abs(aspect(mask, w) - aspect(tm, S)) > 0.08) return { tilted: true };
   const pm = warp(mask, w, h, al.W, S, false).map(v => v > 0.5 ? 1 : 0);
   const gray = new Float32Array(w * h);
   for (let p = 0; p < w * h; p++) gray[p] = 0.299 * rgba[p * 4] + 0.587 * rgba[p * 4 + 1] + 0.114 * rgba[p * 4 + 2];
@@ -466,7 +469,8 @@ function measure(prof, rgba, w, h) {
   const on = quantile(pick(P, interior), 0.5), off = quantile(pick(Gd, and(body, far)), 0.5) * 2 / Math.PI;
   let inter = 0, uni = 0;
   for (let p = 0; p < N; p++) { inter += pm[p] && tm[p]; uni += pm[p] || tm[p]; }
-  const st = { iou: inter / Math.max(uni, 1), featureRatio: on / Math.max(off, 1e-6), view: al.view, tilt: prof.views[al.view].tilt, W: al.W, size: S, ppm };
+  const st = { iou: inter / Math.max(uni, 1), featureRatio: on / Math.max(off, 1e-6), view: al.view, tilt: prof.views[al.view].tilt, W: al.W, size: S, ppm,
+    partMm2: count(tm) * mm2 };
   const tol = Math.max(1, Math.round(ppm)), kt = 2 * tol + 1, ml = rd.mouth, mouth = ml.map(v => v ? 1 : 0);
   // designed through-holes: is background showing anywhere in the hole's mouth, about as much as the CAD predicts?
   const hc = components(th, S, S, false);
@@ -539,7 +543,7 @@ function typeFinding(kind, sh, ppm, extra) {
 // Verdict plus typed findings; `mask` marks finding pixels in the template frame (for drawing)
 function decide(st, cfg) {
   cfg = { ...DEFAULTS, ...cfg };
-  if (st.noPart) return { verdict: "NO PART", findings: [], mask: null, unchecked: 0 };
+  if (st.noPart || st.tilted) return { verdict: "NO PART", findings: [], mask: null, unchecked: 0 };
   const ppm = st.ppm || 1;
   const S = st.size, mask = new Uint8Array(S * S), F = [];
   // A deep or off-axis hole may show almost no background from this camera position; it can't be checked for "blocked"
@@ -579,9 +583,12 @@ function decide(st, cfg) {
       add("unexpected_hole", lab, sh, { label: g, areaMm2: area[g] }, "hole not in the CAD");
     }
   }
-  const miss = st.missing.items.filter(c => c.areaMm2 >= cfg.outlineMm2), exc = st.excess.items.filter(c => c.areaMm2 >= cfg.outlineMm2);
+  // outline tolerance scales down for small parts (0.2% of the part's area, 2 mm² at least, never above outlineMm2)
+  const outlineMin = Math.min(cfg.outlineMm2, Math.max(2, 0.002 * (st.partMm2 || Infinity)));
+  const miss = st.missing.items.filter(c => c.areaMm2 >= outlineMin), exc = st.excess.items.filter(c => c.areaMm2 >= outlineMin);
   const miSh = miss.length ? shapes(st.missing.lab, S) : {}, xsSh = exc.length ? shapes(st.excess.lab, S) : {};
-  for (const c of miss) add("missing_material", st.missing.lab, miSh, c, `${c.areaMm2.toFixed(0)} mm² missing vs CAD`);
+  // a sliver under 1 mm wide along the outline is a ragged or rusty edge, not a chip
+  for (const c of miss) if (miSh[c.label].wid / ppm >= 1) add("missing_material", st.missing.lab, miSh, c, `${c.areaMm2.toFixed(0)} mm² missing vs CAD`);
   for (const c of exc) {
     // extra metal sitting in a designed hole's mouth is a hole that was not cored, even where the hole can't be seen through
     let on = 0, n = 0;
@@ -595,14 +602,65 @@ function decide(st, cfg) {
 
 // ---------------------------------------------------------------- reference-images tab: what kind of defect
 
+// Part mask for the reference-images tab, on any plain background: by colour on a coloured mat (segment), by
+// brightness on white, grey or black paper. null when no clean part/background split is found.
+function partMask(rgba, w, h, loose = false) {
+  const N = w * h, G = new Float32Array(N), border = [];
+  let chroma = 0, nb = 0;
+  for (let p = 0; p < N; p++) G[p] = 0.299 * rgba[p * 4] + 0.587 * rgba[p * 4 + 1] + 0.114 * rgba[p * 4 + 2];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (x < 6 || y < 6 || x >= w - 6 || y >= h - 6) {
+    const p = y * w + x, r = rgba[p * 4], g = rgba[p * 4 + 1], b = rgba[p * 4 + 2];
+    border.push(p); chroma += (Math.max(r, g, b) - Math.min(r, g, b)) / (Math.max(r, g, b) + 1); nb++;
+  }
+  let M;
+  if (chroma / nb >= 0.12) M = segment(rgba, w, h);
+  else {
+    // brightness difference from the paper, or grain: shiny metal can be as bright as white paper but is never as smooth
+    const Gb = blur(G, w, h, 1.5, 3), lb = quantile(border.map(p => Gb[p]), 0.5), u8 = new Uint8Array(N);
+    const Gs = blur(G, w, h, 0.8, 2), T = new Float32Array(N), D = new Float32Array(N);
+    for (let p = 0; p < N; p++) { T[p] = Math.abs(G[p] - Gs[p]); D[p] = Math.abs(Gb[p] - lb); }
+    const Tb = blur(T, w, h, 2, 4), tb = quantile(border.map(p => Tb[p]), 0.5);
+    const sub = Array.from({ length: Math.min(N, 4000) }, (_, i) => Math.floor(i * N / Math.min(N, 4000)));
+    const dq = quantile(sub.map(p => D[p]), 0.99) + 1e-6, tq = Math.max(1e-6, quantile(sub.map(p => Tb[p]), 0.99) - tb);
+    for (let p = 0; p < N; p++) u8[p] = Math.round(255 * Math.min(1, Math.max(D[p] / dq, (Tb[p] - tb) / tq)));
+    const t = otsu(u8);
+    let m = close(open(u8.map(v => v > t ? 1 : 0), w, h, 5), w, h, 5);  // the opening drops ruled lines and paper texture
+    const K = Math.max(9, Math.round(Math.min(w, h) / 40) | 1);
+    m = and(m, dilate(open(m, w, h, K), w, h, K));                       // and trims ruled lines still stuck to the part
+    const cc = components(m, w, h, true);
+    if (cc.n < 1) return null;
+    let k = 1;
+    for (let j = 2; j <= cc.n; j++) if (cc.area[j] > cc.area[k]) k = j;
+    M = cc.lab.map(l => l === k ? 1 : 0);
+    const hc = components(enclosedBackground(M, w, h), w, h, false);
+    const nPart = count(M);
+    for (let p = 0; p < N; p++) if (hc.lab[p] && hc.area[hc.lab[p]] < Math.max(12, 0.01 * nPart)) M[p] = 1;
+  }
+  let n = count(M), edge = 0;
+  for (let x = 0; x < w; x++) edge += M[x] + M[(h - 1) * w + x];
+  for (let y = 0; y < h; y++) edge += M[y * w] + M[y * w + w - 1];
+  return n < 0.03 * N || n > 0.85 * N || edge > (loose ? 0.4 : 0.1) * 2 * (w + h) ? null : M;
+}
+
+// Elongation of a mask (minor / major axis of its equivalent ellipse, 1 = round): it does not change when the part is
+// turned in the photo, but it does when the photo is tilted
+function aspect(M, w) {
+  let n = 0, sx = 0, sy = 0;
+  for (let i = 0; i < M.length; i++) if (M[i]) { n++; sx += i % w; sy += (i / w) | 0; }
+  if (!n) return 0;
+  const cx = sx / n, cy = sy / n;
+  let a = 0, b = 0, c = 0;
+  for (let i = 0; i < M.length; i++) if (M[i]) { const x = i % w - cx, y = ((i / w) | 0) - cy; a += x * x; b += y * y; c += x * y; }
+  a /= n; b /= n; c /= n;
+  const t = Math.sqrt((a - b) ** 2 / 4 + c * c);
+  return Math.sqrt(Math.max(0, (a + b) / 2 - t) / ((a + b) / 2 + t));
+}
+
 // A good part kept at enrolment for typing: grey image, part mask (null without a coloured mat), centre and size
 function surfaceRef(rgba, w, h) {
   const N = w * h, G = new Uint8Array(N);
   for (let p = 0; p < N; p++) G[p] = Math.round(0.299 * rgba[p * 4] + 0.587 * rgba[p * 4 + 1] + 0.114 * rgba[p * 4 + 2]);
-  let M = segment(rgba, w, h), n = count(M), border = 0;
-  for (let x = 0; x < w; x++) border += M[x] + M[(h - 1) * w + x];
-  for (let y = 0; y < h; y++) border += M[y * w] + M[y * w + w - 1];
-  if (n < 0.03 * N || n > 0.85 * N || border > 0.1 * 2 * (w + h)) M = null;  // no usable part/background split
+  const M = partMask(rgba, w, h), n = M ? count(M) : 0;
   let cx = w / 2, cy = h / 2, r = 0.42 * Math.min(w, h);
   if (M) {
     let sx = 0, sy = 0;
@@ -697,7 +755,7 @@ function typeSurface(rgba, w, h, d, H, W, thr, refs) {
   const newDark = open(both.map((v, p) => v && diff[p] < -2.2 * noise ? 1 : 0), w, h, 2), lostDark = open(both.map((v, p) => v && diff[p] > 2.2 * noise ? 1 : 0), w, h, 2);
   const lost = open(and(Mr, not(Mt)), w, h, 5), gained = open(and(Mt, not(Mr)), w, h, 5);
   const holesT = test.M ? enclosedBackground(Mt, w, h) : new Uint8Array(N), holesR = test.M ? dilate(enclosedBackground(Mr, w, h), w, h, 5) : new Uint8Array(N);
-  const partPx = count(Mt), out = [];
+  const partPx = count(Mt), totLost = count(lost), totGained = count(gained), out = [];
   const add = (defect, why, cx, cy, score) => out.push({ type: "surface", defect, why, cx, cy, score, text: `likely ${defect} (${why})` });
   // areas: connected hot cells around the strongest peaks
   let peak = 0;
@@ -718,7 +776,9 @@ function typeSurface(rgba, w, h, d, H, W, thr, refs) {
     const Rd = dilate(Rc, w, h, 2 * Math.round(cw) + 1), cx = ((a.j % W) + 0.5) / W, cy = (((a.j / W) | 0) + 0.5) / H;
     const inR = m => { let n = 0; for (let p = 0; p < N; p++) n += m[p] && Rd[p] ? 1 : 0; return n; };
     const nLost = inR(lost), nGained = inR(gained), minPx = Math.max(12, partPx / 2000);
-    if (nLost >= minPx && nLost >= nGained) {
+    // a real chip, hole or fin puts most of the outline change in one place; change spread all round the outline is
+    // misalignment, tilt or a ragged (rusty) edge, so it is not read as missing or extra metal
+    if (nLost >= minPx && nLost >= nGained && nLost >= 0.35 * totLost) {
       const opening = and(lost, holesT, Rd), nOpen = count(opening);
       if (nOpen >= 0.5 * nLost) {
         const sh = shapes(components(opening, w, h, true).lab, w), big = Object.values(sh).sort((x, y) => y.n - x.n)[0];
@@ -727,7 +787,7 @@ function typeSurface(rgba, w, h, d, H, W, thr, refs) {
       } else add(nLost >= 0.012 * partPx ? "broken or unfilled section (misrun)" : "chipped edge", "material missing at the outline", cx, cy, a.v);
       continue;
     }
-    if (nGained >= minPx) {
+    if (nGained >= minPx && nGained >= 0.35 * totGained) {
       if (inR(and(gained, holesR)) >= 0.5 * nGained) add("blocked hole", "metal where good parts have a hole", cx, cy, a.v);
       else {
         const sh = Object.values(shapes(components(and(gained, Rd), w, h, true).lab, w)).sort((x, y) => y.n - x.n)[0];
@@ -809,8 +869,8 @@ if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScop
       } else if (m.cmd === "inspect") {
         const prof = profiles[m.name];
         if (!prof) throw new Error("CAD part not prepared");
-        const st = measure(prof, m.rgba, m.w, m.h), d = decide(st, m.cfg), ov = st.noPart ? null : overlay(prof, st, d.mask, m.w, m.h);
-        self.postMessage({ id: m.id, result: { noPart: !!st.noPart, iou: st.iou, featureRatio: st.featureRatio, verdict: d.verdict, unchecked: d.unchecked,
+        const st = measure(prof, m.rgba, m.w, m.h), d = decide(st, m.cfg), ov = st.noPart || st.tilted ? null : overlay(prof, st, d.mask, m.w, m.h);
+        self.postMessage({ id: m.id, result: { noPart: !!st.noPart, tilted: !!st.tilted, iou: st.iou, featureRatio: st.featureRatio, verdict: d.verdict, unchecked: d.unchecked,
           findings: d.findings, overlay: ov && ov.rgba, centroid: ov && ov.centroid } }, ov ? [ov.rgba.buffer] : []);
       } else if (m.cmd === "surface") {
         self.postMessage({ id: m.id, result: typeSurface(m.rgba, m.w, m.h, m.d, m.H, m.W, m.thr, m.refs) });
@@ -819,6 +879,6 @@ if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScop
   };
 }
 
-const CAD = { segment, surfaceRef, typeSurface, loadCAD, parseSTL, parseOBJ, prepare, buildProfile, measure, decide, overlay, preview, FACES: Object.keys(FACES), DEFAULTS };
+const CAD = { segment, partMask, aspect, erode, surfaceRef, typeSurface, loadCAD, parseSTL, parseOBJ, prepare, buildProfile, measure, decide, overlay, preview, FACES: Object.keys(FACES), DEFAULTS };
 if (typeof module !== "undefined" && module.exports) module.exports = CAD; else root.CAD = CAD;
 })(typeof self !== "undefined" ? self : this);

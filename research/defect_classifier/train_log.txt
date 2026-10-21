@@ -1,0 +1,52 @@
+classes: ['crack', 'flash_burr', 'gas', 'good', 'misrun', 'mould_surface', 'scratch', 'shrinkage'] | train counts: [123, 2318, 810, 1718, 119, 427, 728, 741] | loss weights: [4.34 1.   1.69 1.16 4.41 2.33 1.78 1.77]
+epoch 1/12  loss 3.886  val macro-F1 0.451  (230s)
+epoch 2/12  loss 1.783  val macro-F1 0.612  (216s)
+epoch 3/12  loss 1.377  val macro-F1 0.715  (207s)
+epoch 4/12  loss 1.232  val macro-F1 0.753  (211s)
+epoch 5/12  loss 1.166  val macro-F1 0.781  (222s)
+epoch 6/12  loss 1.095  val macro-F1 0.834  (216s)
+epoch 7/12  loss 1.057  val macro-F1 0.830  (209s)
+epoch 8/12  loss 1.020  val macro-F1 0.864  (215s)
+epoch 9/12  loss 0.993  val macro-F1 0.872  (229s)
+epoch 10/12  loss 0.973  val macro-F1 0.869  (226s)
+epoch 11/12  loss 0.963  val macro-F1 0.872  (221s)
+epoch 12/12  loss 0.960  val macro-F1 0.871  (226s)
+best val: accuracy 0.917  macro-F1 0.872
+  crack          n=  32  recall 0.97  precision 0.78
+  flash_burr     n= 556  recall 0.99  precision 0.99
+  gas            n= 208  recall 0.82  precision 0.89
+  good           n= 375  recall 0.99  precision 0.99
+  misrun         n=  26  recall 0.96  precision 0.93
+  mould_surface  n=  90  recall 0.73  precision 0.84
+  scratch        n= 156  recall 0.78  precision 0.80
+  shrinkage      n= 149  recall 0.83  precision 0.72
+  confusion (rows = truth):  crack  flash    gas   good  misru  mould  scrat  shrin
+         crack     31      0      0      0      0      0      0      1
+    flash_burr      0    550      0      0      0      1      3      2
+           gas      1      1    170      0      2      3      8     23
+          good      0      0      0    373      0      1      1      0
+        misrun      0      0      0      0     25      0      1      0
+  mould_surfac      3      0      1      1      0     66     12      7
+       scratch      3      2      3      4      0      7    121     16
+     shrinkage      2      1     16      0      0      1      5    124
+TEST (held-out photos): accuracy 0.904  macro-F1 0.826
+  crack          n=  26  recall 0.77  precision 0.61
+  flash_burr     n= 599  recall 0.99  precision 0.99
+  gas            n= 177  recall 0.84  precision 0.85
+  good           n= 289  recall 0.99  precision 0.98
+  misrun         n=  20  recall 0.90  precision 0.69
+  mould_surface  n=  80  recall 0.78  precision 0.86
+  scratch        n= 184  recall 0.73  precision 0.84
+  shrinkage      n= 159  recall 0.77  precision 0.70
+  confusion (rows = truth):  crack  flash    gas   good  misru  mould  scrat  shrin
+         crack     20      0      1      0      3      0      2      0
+    flash_burr      0    596      1      1      0      0      1      0
+           gas      0      0    148      0      2      2      5     20
+          good      0      0      0    285      0      0      3      1
+        misrun      0      0      1      0     18      0      1      0
+  mould_surfac      3      0      1      0      0     62      6      8
+       scratch      5      5      2      6      2      7    134     23
+     shrinkage      5      0     21      0      1      1      8    123
+/home/user/cast_defect/research/defect_classifier/train_types.py:108: DeprecationWarning: You are using the legacy TorchScript-based ONNX export. Starting in PyTorch 2.9, the new torch.export-based ONNX exporter has become the default. Learn more about the new export logic: https://docs.pytorch.org/docs/stable/onnx_export.html. For exporting control flow: https://pytorch.org/tutorials/beginner/onnx/export_control_flow_model_to_onnx_tutorial.html
+  torch.onnx.export(exp, x, out / "types.onnx", input_names=["input"], output_names=["probs", "features"], opset_version=17, dynamo=False)
+exported /home/user/models/types.onnx (16.0 MB), ONNX matches torch

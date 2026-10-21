@@ -170,6 +170,13 @@
   #history li .m { flex:1; display:flex; flex-wrap:wrap; justify-content:space-between; column-gap:10px; white-space:nowrap; }
   #history li .m small { color:var(--muted); font-size:12px; }
   #history li button { padding:6px 14px; font-size:12px; }
+  #fix { margin:12px 0 0; padding:18px 20px; border-radius:28px; }
+  #fix h2 { margin:0 0 4px; font-size:17px; font-weight:600; } #fix .why { margin:0 0 12px; color:var(--muted); font-size:13px; }
+  #fix .chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }
+  #fix .cols { display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; }
+  #fix h3 { margin:0 0 6px; font-size:12px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--maroon-hi); }
+  #fix ul { margin:0; padding-left:18px; font-size:13px; line-height:1.5; color:#e6dadd; } #fix li + li { margin-top:4px; }
+  @media (max-width:760px) { #fix .cols { grid-template-columns:1fr; } }
   .r { color:var(--reject); font-weight:700; } .p { color:var(--pass); font-weight:700; } .n { color:var(--amber); font-weight:700; }
 
   @media (max-width:640px) {
@@ -214,6 +221,10 @@
     <span id="status" class="tag">Loading</span>
   </header>
 
+  <section id="modelpanel" class="panel glass">
+    <div class="phead"><h2>What are you photographing?</h2></div>
+    <div id="mmode"><button class="chip glass on" data-m="closeup">Close-up of a defect<small>names the type</small></button><button class="chip glass" data-m="whole">Whole impeller<small>defect / OK</small></button></div>
+  </section>
   <section id="refpanel" class="panel glass" hidden>
     <div class="phead"><h2>Part types</h2><button id="delprof" class="glass" hidden>Delete</button></div>
     <div id="parts"></div>
@@ -258,7 +269,7 @@
       <div class="scan" aria-hidden="true"></div>
       <div class="hud"><span class="tag"><i class="dot"></i>Live</span><span class="tag" id="res"></span>
         <button id="flip" class="glass icon end" hidden aria-label="Switch camera"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-14.3 4.9M4 12a8 8 0 0 1 14.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg></button></div>
-      <span class="tag hint">Fit the part inside the frame</span>
+      <span class="tag hint" id="hint">Fit the part inside the frame</span>
       <div id="camoff" class="empty" hidden><svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.5 5H15l2 2.5h2.5A1.5 1.5 0 0 1 21 9v8.5M17.5 19.5h-13A1.5 1.5 0 0 1 3 18V9a1.5 1.5 0 0 1 1.5-1.5H6"/><path d="M9.5 10.5a3 3 0 0 0 4 4"/></svg>
         <b>Camera off</b><span id="camoffmsg">Allow camera access to inspect live, or use “Test with photo”.</span>
         <button id="camretry" class="glass">Enable camera</button></div>
@@ -279,11 +290,13 @@
     <button id="report" class="glass" hidden>PDF report</button>
     <button id="export" class="glass">Export CSV</button>
   </div>
+  <section id="fix" class="glass" hidden aria-live="polite"></section>
   <h2 class="sect" id="histhead" hidden>Recent inspections</h2>
   <ul id="history"></ul>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js" crossorigin="anonymous"></script>
+<script src="remedies.js"></script>
 <script>
 const THRESHOLD = 0.5;  // defect probability above this = REJECT. Tune on the shop floor.
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
@@ -292,6 +305,13 @@ const $ = id => document.getElementById(id);
 const video = $("video"), view = $("view"), verdict = $("verdict"), btn = $("inspect");
 const log = [];
 let session, meta, nextId = 1;
+// Tab 1 has two models: the close-up defect-type classifier (types.onnx) and the whole-impeller defect/OK model
+let mmode = "closeup", typesSession, typesMeta;
+try { mmode = localStorage.getItem("mmode") || "closeup"; } catch (e) {}
+const TYPE_NAMES = { gas: "gas porosity / blowhole", shrinkage: "shrinkage cavity", crack: "crack", misrun: "misrun / cold shut",
+  flash_burr: "flash / burr", mould_surface: "mould or sand defect (scar, inclusion)", scratch: "scratch or handling mark", good: "good surface" };
+const loadTypes = () => typesSession ? Promise.resolve() : Promise.all([fetch("types.json").then(r => r.json()),
+  ort.InferenceSession.create("types.onnx", { executionProviders: ["wasm"] })]).then(([m, s]) => { typesMeta = m; typesSession = s; });
 try { nextId = +localStorage.getItem("reportId") || 1; } catch (e) {}
 
 const jet = v => [1.5 - Math.abs(4 * v - 3), 1.5 - Math.abs(4 * v - 2), 1.5 - Math.abs(4 * v - 1)]
@@ -355,12 +375,38 @@ function crop(src, w, h, n) {
   return c;
 }
 
+// Square crop around the part, found on a small copy of the whole photo: a part that is off-centre or near the edge of
+// a gallery photo is not cut off, and every photo shows the part at the same size. Falls back to the centre crop.
+function framePart(src, w, h, n) {
+  if (!window.CAD) return crop(src, w, h, n);
+  const k = 256 / Math.max(w, h), sw = Math.max(8, Math.round(w * k)), sh = Math.max(8, Math.round(h * k));
+  const s = document.createElement("canvas"); s.width = sw; s.height = sh;
+  const sg = s.getContext("2d", { willReadFrequently: true }); sg.drawImage(src, 0, 0, sw, sh);
+  const px = sg.getImageData(0, 0, sw, sh).data, M = CAD.partMask(px, sw, sh, true);
+  if (!M) return crop(src, w, h, n);
+  let x0 = sw, y0 = sh, x1 = 0, y1 = 0;
+  for (let p = 0; p < M.length; p++) if (M[p]) { const x = p % sw, y = (p / sw) | 0; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  const side = 1.2 * Math.max(x1 - x0 + 1, y1 - y0 + 1) / k, cx = (x0 + x1 + 1) / 2 / k, cy = (y0 + y1 + 1) / 2 / k;
+  const ch = [[], [], []];
+  for (let x = 0; x < sw; x++) for (const y of [0, sh - 1]) for (let j = 0; j < 3; j++) ch[j].push(px[4 * (y * sw + x) + j]);
+  for (let y = 0; y < sh; y++) for (const x of [0, sw - 1]) for (let j = 0; j < 3; j++) ch[j].push(px[4 * (y * sw + x) + j]);
+  const c = document.createElement("canvas"); c.width = c.height = n;
+  const g = c.getContext("2d");
+  g.fillStyle = `rgb(${ch.map(v => v.sort((a, b) => a - b)[v.length >> 1]).join(",")})`; g.fillRect(0, 0, n, n);
+  g.drawImage(src, cx - side / 2, cy - side / 2, side, side, 0, 0, n, n);  // the parts of the square outside the photo stay background
+  return c;
+}
+// Tabs 2 and 3 compare whole parts, so they frame the part; the close-up and whole-impeller models keep the centre crop
+const grab = (src, w, h) => (tab === "ref" || tab === "cad") ? framePart(src, w, h, view.width) : crop(src, w, h, view.width);
+
 // Canvas -> normalised CHW float tensor data at the model's input size
-function toTensor(c) {
-  const n = meta.size, px = crop(c, c.width, c.height, n).getContext("2d").getImageData(0, 0, n, n).data;
+function toTensor(c, m = meta) {
+  const n = m.size, px = crop(c, c.width, c.height, n).getContext("2d").getImageData(0, 0, n, n).data;
   const x = new Float32Array(3 * n * n);
-  for (let i = 0; i < n * n; i++)
-    for (let c = 0; c < 3; c++) x[c * n * n + i] = (px[4 * i + c] / 255 - meta.mean[c]) / meta.std[c];
+  for (let i = 0; i < n * n; i++) {
+    const g = m.grayscale ? (0.299 * px[4 * i] + 0.587 * px[4 * i + 1] + 0.114 * px[4 * i + 2]) / 255 : 0;
+    for (let c = 0; c < 3; c++) x[c * n * n + i] = ((m.grayscale ? g : px[4 * i + c] / 255) - m.mean[c]) / m.std[c];
+  }
   return new ort.Tensor("float32", x, [1, 3, n, n]);
 }
 
@@ -379,11 +425,34 @@ async function inspectModel(raw) {
     detail: `${(conf * 100).toFixed(1)}% confidence` + (reject ? " · heat = regions that drove the defect call" : " · no defect evidence above threshold") };
 }
 
+// Close-up classifier: which defect type fills the frame, with a class activation map for that type
+async function inspectTypes(raw) {
+  await loadTypes();
+  const out = await typesSession.run({ input: toTensor(raw, typesMeta) }), P = out.probs.data, C = typesMeta.classes;
+  const gi = C.indexOf("good"), pDefect = 1 - P[gi];
+  const ranked = C.map((c, i) => [c, P[i]]).filter(([c]) => c !== "good").sort((a, b) => b[1] - a[1]);
+  const reject = pDefect > THRESHOLD, [top, pt] = ranked[0], k = C.indexOf(top);
+  const [, K, H, W] = out.features.dims, f = out.features.data, wts = typesMeta.cam_weights[k], map = new Float32Array(H * W);
+  for (let c = 0; c < K; c++) for (let j = 0; j < H * W; j++) map[j] += wts[c] * f[c * H * W + j];
+  let max = 0, peak = 0;
+  for (let j = 0; j < map.length; j++) { map[j] = Math.max(0, map[j]); if (map[j] > max) { max = map[j]; peak = j; } }
+  const pct = v => (v * 100).toFixed(0) + "%", share = pt / pDefect;  // how clearly the top type wins among defect types
+  const name = TYPE_NAMES[top] || top, second = ranked[1];
+  const findings = reject ? [{ type: "closeup", defect: name, why: `${pct(share)} of the defect probability${share < 0.55 ? `; could also be ${TYPE_NAMES[second[0]]}` : ""}`,
+    text: `likely ${name} (${pct(share)})`, cx: ((peak % W) + 0.5) / W, cy: ((peak / W | 0) + 0.5) / H }] : [];
+  const detail = reject ? `Likely ${name} · ${pct(share)} sure of the type${share < 0.55 ? `, could also be ${TYPE_NAMES[second[0]]}` : ""} · p(defect) ${pct(pDefect)}`
+    : `Looks like a good surface · p(defect) ${pct(pDefect)}`;
+  return { mode: "types", verdict: reject ? "REJECT" : "PASS", pDefect, defectType: reject ? name : null, typeShare: share, probs: Object.fromEntries(C.map((c, i) => [c, P[i]])),
+    findings, map, H, W, lo: 0, hi: max, detail: detail + (reject ? " · heat = where that type was seen" : "") };
+}
+
 async function inspect(src, w, h) {
-  const raw = crop(src, w, h, view.width);
-  verdict.className = ""; verdict.textContent = "Inspecting…";
+  if (tab === "ref" || tab === "cad") await loadCadLib();
+  const raw = grab(src, w, h);
+  verdict.className = ""; verdict.textContent = "Inspecting…"; $("fix").hidden = true;
   $("stage").classList.add("busy");
-  const r = await (tab === "cad" ? inspectCad(raw) : active ? inspectRef(raw, active) : inspectModel(raw)).finally(() => $("stage").classList.remove("busy"));
+  const r = await (tab === "cad" ? inspectCad(raw) : active ? inspectRef(raw, active) : mmode === "closeup" ? inspectTypes(raw) : inspectModel(raw))
+    .finally(() => $("stage").classList.remove("busy"));
   const { map, H, W, lo, hi } = r, flagged = r.verdict !== "PASS";
   const t = v => Math.min(1, Math.max(0, (v - lo) / (hi - lo || 1)));
 
@@ -408,6 +477,9 @@ async function inspect(src, w, h) {
 
   verdict.className = { PASS: "pass", REJECT: "reject", "NO MATCH": "nomatch", "WRONG PART": "nomatch" }[r.verdict];
   verdict.innerHTML = `${r.verdict}<small>${r.detail}</small>`;
+  // pre-written guidance for every defect type found (the pre-trained model gives no type, so general guidance)
+  r.fixes = r.verdict !== "REJECT" ? [] : [...new Set((r.mode === "model" ? ["defect"] : (r.findings || []).map(f => f.defect)).map(n => remedyFor(n)?.key).filter(Boolean))];
+  renderFix(r.fixes, 0);
   Object.assign($("viewtag"), { hidden: false, textContent: r.verdict, className: "tag end " + verdict.className });
   $("viewempty").hidden = true; $("legend").hidden = !flagged || !map; $("stage").classList.add("has-result");
   // Where the evidence sits (3x3 zone of the hottest cell, or of the CAD findings) and how much of the part it covers
@@ -424,6 +496,18 @@ async function inspect(src, w, h) {
   try { localStorage.setItem("reportId", nextId); } catch (e) {}
   $("report").hidden = false;
   renderHistory();
+}
+
+// "What to do" card: how to confirm the defect, likely causes, process fixes and what to do with this part
+function renderFix(keys, i) {
+  const box = $("fix"), all = keys.map(k => REMEDIES.find(x => x.key === k)), m = all[i];
+  box.hidden = !m;
+  if (!m) return;
+  const list = a => `<ul>${a.map(t => `<li>${t}</li>`).join("")}</ul>`;
+  box.innerHTML = `<h2>What to do: ${m.title}</h2><p class="why">${m.confirm}</p>` +
+    (all.length > 1 ? `<div class="chips">${all.map((x, j) => `<button class="chip glass${j === i ? " on" : ""}" data-i="${j}">${x.title}</button>`).join("")}</div>` : "") +
+    `<div class="cols"><div><h3>Likely causes</h3>${list(m.causes)}</div><div><h3>Fix the process</h3>${list(m.fixes)}</div><div><h3>This part</h3>${list(m.part)}</div></div>`;
+  box.querySelectorAll(".chip").forEach(b => b.onclick = () => renderFix(keys, +b.dataset.i));
 }
 
 // ---------- Reference mode: enrol good parts, flag patches that match none of them (PatchCore-style) ----------
@@ -523,7 +607,9 @@ async function inspectCad(raw) {
   const S = raw.width, px = raw.getContext("2d").getImageData(0, 0, S, S).data, part = cadProf.name;
   const d = await cadCall({ cmd: "inspect", name: part, rgba: px, w: S, h: S }, null, [px.buffer]);
   if (d.noPart) return { mode: "cad", part, verdict: "NO MATCH", findings: [], pDefect: 1,
-    detail: "No part found: use a plain coloured mat (green or blue) and keep the whole part in view" };
+    detail: "No part found: use a plain background that contrasts with the part (coloured mat, or white paper for dark parts) and keep the whole part in view" };
+  if (d.tilted) return { mode: "cad", part, verdict: "NO MATCH", findings: [], pDefect: 1,
+    detail: "Part looks tilted: hold the phone straight above the part, with all of it in the frame, and retry" };
   const c = document.createElement("canvas");
   c.width = c.height = S; c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(d.overlay.buffer), S, S), 0, 0);
   const st = d, ov = { centroid: d.centroid };
@@ -572,6 +658,26 @@ async function nearest(q, bank, D) {
   return best;
 }
 const top10 = d => Float32Array.from(d).sort().slice(-10).reduce((a, b) => a + b, 0) / 10;
+// The background, and whatever shows through the part's holes, is painted one flat colour (the enrolled photos' typical
+// background) before the features are computed, in the enrolled photos and the inspected one alike: another table,
+// paper or shadow then can't look like a defect, while a new hole or a chip (background where good parts have metal)
+// and a filled hole (metal where they have background) still do.
+function bgColour(c, M) {
+  const px = c.getContext("2d").getImageData(0, 0, c.width, c.height).data, ch = [[], [], []];
+  for (let p = 0; p < M.length; p += 7) if (!M[p]) for (let k = 0; k < 3; k++) ch[k].push(px[4 * p + k]);
+  return ch.map(v => median(v));
+}
+function flatBg(c, M, rgb) {
+  if (!M) return c;
+  const E = CAD.erode(M, c.width, c.height, 5);  // edge pixels blend in the old background colour, so they are repainted too
+  const o = document.createElement("canvas"); o.width = c.width; o.height = c.height;
+  const g = o.getContext("2d"); g.drawImage(c, 0, 0);
+  const im = g.getImageData(0, 0, o.width, o.height);
+  for (let p = 0; p < E.length; p++) if (!E[p]) im.data.set(rgb, 4 * p);
+  g.putImageData(im, 0, 0);
+  return o;
+}
+const maskOf = c => window.CAD ? CAD.partMask(c.getContext("2d").getImageData(0, 0, c.width, c.height).data, c.width, c.height) : null;
 const median = d => Float32Array.from(d).sort()[d.length >> 1];
 function rot90(c, k) {
   const o = document.createElement("canvas"); o.width = o.height = c.width;
@@ -590,11 +696,14 @@ function capRows(rows, D, cap) {
 }
 const concat = (arrs) => { const o = new Float32Array(arrs.reduce((a, b) => a + b.length, 0)); let p = 0; for (const a of arrs) { o.set(a, p); p += a.length; } return o; };
 
-async function buildProfile(name, anyRot, imgs) {
-  await refModels();
-  const views = anyRot ? 4 : 1, per = [], plain = [];
+async function buildProfile(name, anyRot, photos) {
+  const imgs = photos.slice();  // photos still loading must not join half-way through
+  await Promise.all([refModels(), loadCadLib()]);
+  const masks = imgs.map(maskOf), cols = imgs.map((c, i) => masks[i] && bgColour(c, masks[i])).filter(Boolean);
+  const bgRGB = cols.length ? [0, 1, 2].map(k => median(cols.map(c => c[k]))) : null;
+  const views = anyRot ? 4 : 1, per = [], plain = [], flat = imgs.map((c, i) => bgRGB ? flatBg(c, masks[i], bgRGB) : c);
   let D;
-  for (const [i, c] of imgs.entries()) {
+  for (const [i, c] of flat.entries()) {
     verdict.textContent = `Learning good part ${i + 1} of ${imgs.length}…`;
     const vs = [];
     for (let k = 0; k < views; k++) { const p = await patchesOf(rot90(c, k)); D = p.D; vs.push(p.data); if (k === 0) plain.push(p.data); }
@@ -604,7 +713,7 @@ async function buildProfile(name, anyRot, imgs) {
   const cal = [], med = [];
   const calibrate = d => { cal.push(top10(d)); med.push(median(d)); };
   if (imgs.length === 1) {
-    const z = imgs[0], zc = document.createElement("canvas"); zc.width = zc.height = z.width;   // slightly zoomed re-view of the only part
+    const z = flat[0], zc = document.createElement("canvas"); zc.width = zc.height = z.width;   // slightly zoomed re-view of the only part
     zc.getContext("2d").drawImage(z, z.width * 0.04, z.width * 0.04, z.width * 0.92, z.width * 0.92, 0, 0, zc.width, zc.width);
     calibrate(await nearest((await patchesOf(zc)).data, capRows(per[0], D, BANK_CAP), D));
   } else {
@@ -615,17 +724,21 @@ async function buildProfile(name, anyRot, imgs) {
   }
   const thumbs = imgs.slice(0, 6).map(c => crop(c, c.width, c.height, 96).toDataURL("image/jpeg", 0.7));
   // a few good parts (grey + part mask) to compare against when typing a defect
-  await loadCadLib();
   const refs = imgs.slice(0, REF_KEEP).map(c => CAD.surfaceRef(c.getContext("2d").getImageData(0, 0, c.width, c.height).data, c.width, c.height));
   return { name, anyRot, D, bank: capRows(concat(per), D, BANK_CAP), cal: Math.max(...cal), calMed: Math.max(...med), sens: DEFAULT_SENS,
-           count: imgs.length, thumbs, refs, created: new Date().toISOString() };
+           count: imgs.length, thumbs, refs, bg: "flat", bgRGB, created: new Date().toISOString() };
 }
 
 async function inspectRef(raw, p) {
   await refModels();
-  const d = await nearest((await patchesOf(raw)).data, p.bank, p.D);
+  await loadCadLib();
+  const M = p.bg === "flat" && p.bgRGB ? maskOf(raw) : null;
+  const d = await nearest((await patchesOf(M ? flatBg(raw, M, p.bgRGB) : raw)).data, p.bank, p.D);
   const score = top10(d), thr = p.cal * p.sens;
-  const v = median(d) > NO_MATCH * p.calMed ? "NO MATCH" : score > thr ? "REJECT" : "PASS";
+  // a tilted photo shows the part's side and hides part of its holes, which would read as defects: ask for a retake
+  const refAsp = (p.refs || []).filter(r => r.M).map(r => CAD.aspect(r.M, r.w)), Mv = M || maskOf(raw);
+  const tilted = refAsp.length && Mv && Math.abs(CAD.aspect(Mv, raw.width) - median(refAsp)) > 0.08;
+  const v = tilted || median(d) > NO_MATCH * p.calMed ? "NO MATCH" : score > thr ? "REJECT" : "PASS";
   // what kind of defect: compare the flagged areas with the best-matching enrolled good part
   let findings = [];
   if (v === "REJECT" && p.refs?.length) {
@@ -634,10 +747,13 @@ async function inspectRef(raw, p) {
       .catch(err => { console.error(err); return []; });
   }
   const kinds = [...new Set(findings.map(f => f.defect))];
-  const detail = v === "NO MATCH" ? `Doesn't look like “${p.name}”. Check the part type and framing, then retry.`
+  const noSplit = p.bg === "flat" && p.bgRGB && !M ? " · couldn't separate the part from the background: use a plain background that contrasts with it (dark mat for bright parts)" : "";
+  const detail = tilted ? `Part looks tilted or cut off compared with the good photos. Hold the phone straight above the part, with all of it in the frame, and retry.`
+    : v === "NO MATCH" ? `Doesn't look like “${p.name}”. Check the part type and framing, then retry.` + noSplit
     : (kinds.length ? `Likely ${kinds[0]}${kinds.length > 1 ? ` (also ${kinds.slice(1).join(", ")})` : ""} · ` : "") +
       `Anomaly score ${score.toFixed(2)} vs threshold ${thr.toFixed(2)} · ${p.count} good reference${p.count > 1 ? "s" : ""}` +
-      (v === "REJECT" ? (p.refs ? " · heat = areas unlike any good part" : " · re-save this reference to also get the defect type") : "");
+      (v === "REJECT" ? " · heat = areas unlike any good part" + noSplit : "") +
+      (p.bg !== "flat" ? " · saved with an older version: delete and re-add this part so the background and its holes are ignored" + (p.refs ? "" : " and defect types show") : "");
   return { mode: "ref", profile: p.name, refCount: p.count, score, thr, verdict: v, pDefect: Math.min(1, score / (2 * thr)), findings,
            map: d, H: 28, W: 28, lo: p.calMed, hi: Math.max(...d, thr), detail };  // colour from "typical good patch" up to the worst patch
 }
@@ -666,23 +782,34 @@ function renderParts() {
     `${p.name.replace(/</g, "&lt;")}<small>${p.count} refs</small></button>`).join("") +
     `<button class="chip glass${sel === "__new" ? " on" : ""}" data-name="__new">+ New part</button>`;
 }
+$("mmode").onclick = e => {
+  const b = e.target.closest("[data-m]");
+  if (!b || b.dataset.m === mmode) return;
+  mmode = b.dataset.m;
+  try { localStorage.setItem("mmode", mmode); } catch (err) {}
+  if (mmode === "closeup") loadTypes().catch(console.error);
+  setMode();
+};
 function setMode() {
+  $("fix").hidden = true;
   const ref = tab === "ref", enrolling = ref && sel === "__new";
-  $("refpanel").hidden = !ref; $("cadpanel").hidden = tab !== "cad"; $("enrol").hidden = !enrolling;
+  $("refpanel").hidden = !ref; $("cadpanel").hidden = tab !== "cad"; $("enrol").hidden = !enrolling; $("modelpanel").hidden = tab !== "model";
+  $("mmode").querySelectorAll(".chip").forEach(b => b.classList.toggle("on", b.dataset.m === mmode));
   active = ref && !enrolling ? profiles.find(p => p.name === sel) ?? null : null;
   $("delprof").hidden = $("sens").hidden = !active;
   if (active) $("sensr").value = active.sens;
   const cad = tab === "cad", cadNewPart = cad && cadSel === "__new", cadReady = cad && cadProf?.name === cadSel;
   $("cadnew").hidden = !cadNewPart; $("caddel").hidden = !cad || cadNewPart || !cadSel;
   if (cad && !cadNewPart && !cadReady) ensureCadProfile();
-  $("viewcap").textContent = cad ? "CAD overlay" : active ? "Difference map" : "Grad-CAM";
-  $("sub").textContent = SUBS[tab];
+  $("viewcap").textContent = cad ? "CAD overlay" : active ? "Difference map" : mmode === "closeup" ? "Type heat map" : "Grad-CAM";
+  $("hint").textContent = tab === "model" && mmode === "closeup" ? "Fill the frame with the defect" : "Fit the part inside the frame";
+  $("sub").textContent = tab === "model" && mmode === "closeup" ? "Close-up defect-type classifier · fill the frame with the defect" : SUBS[tab];
   btn.disabled = enrolling || !session || (cad && !cadReady);
   verdict.className = "";
   if (enrolling) { renderEnrol(); verdict.textContent = "Show good parts to create the reference"; }
   else if (cadNewPart) verdict.textContent = "Choose a CAD file to create the reference";
   else if (cad) verdict.textContent = cadReady ? `Ready: inspecting “${cadSel}” against its CAD` : `Preparing “${cadSel}” from its CAD…`;
-  else if (session) verdict.textContent = active ? `Ready: inspecting “${active.name}”` : "Ready: place part under camera";
+  else if (session) verdict.textContent = active ? `Ready: inspecting “${active.name}”` : tab === "model" && mmode === "closeup" ? "Ready: fill the frame with the defect, about 2–5 cm away" : "Ready: place part under camera";
 }
 const TABS = ["model", "ref", "cad"], navBtns = [...$("nav").querySelectorAll(":scope > [data-tab]")];
 const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -756,14 +883,16 @@ $("parts").onclick = e => {
   renderParts(); setMode();
 };
 $("pname").oninput = renderEnrol;
-$("capgood").onclick = () => {
+$("capgood").onclick = async () => {
   if (!video.videoWidth) return askCamera();
-  addGood(crop(video, video.videoWidth, video.videoHeight, view.width));
+  await loadCadLib();
+  addGood(grab(video, video.videoWidth, video.videoHeight));
 };
 $("upgood").onchange = async e => {
+  await loadCadLib();
   for (const f of [...e.target.files].slice(0, MAX_REF - enrolImgs.length)) {
     const im = new Image(); im.src = URL.createObjectURL(f); await im.decode();
-    addGood(crop(im, im.naturalWidth, im.naturalHeight, view.width)); URL.revokeObjectURL(im.src);
+    addGood(grab(im, im.naturalWidth, im.naturalHeight)); URL.revokeObjectURL(im.src);
   }
   e.target.value = "";
 };
@@ -794,7 +923,7 @@ function renderHistory() {
     const thumb = `<img src="${e.img}" alt="">`;
     return `<li>${e.verdict !== "PASS" ? `<a href="${e.img}" download="flagged_${e.time.replace(/[:.]/g, "-")}.png" title="Save overlay">${thumb}</a>` : thumb}
       <span class="${{ PASS: "p", REJECT: "r", "NO MATCH": "n" }[e.verdict]}">${e.verdict}</span>
-      <span class="m">${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : e.mode === "cad" ? `${e.part.replace(/</g, "&lt;")} · CAD` : `p(defect) ${e.pDefect.toFixed(3)}`}${e.verdict === "REJECT" && e.findings?.[0]?.defect ? ` · ${e.findings[0].defect.replace(/</g, "&lt;")}` : ""}<small>${new Date(e.time).toLocaleTimeString()}</small></span>
+      <span class="m">${e.mode === "ref" ? `score ${e.score.toFixed(2)}/${e.thr.toFixed(2)}` : e.mode === "cad" ? `${e.part.replace(/</g, "&lt;")} · CAD` : `${e.mode === "types" ? "close-up · " : ""}p(defect) ${e.pDefect.toFixed(3)}`}${e.verdict === "REJECT" && e.findings?.[0]?.defect ? ` · ${e.findings[0].defect.replace(/</g, "&lt;")}` : ""}<small>${new Date(e.time).toLocaleTimeString()}</small></span>
       <button class="glass" data-i="${i}">PDF</button></li>`;
   }).join("");
 }
@@ -802,7 +931,7 @@ function renderHistory() {
 // Self-contained HTML report (images embedded as data URLs). Open it and Print -> Save as PDF.
 function reportHtml(e) {
   const reject = e.verdict === "REJECT", nomatch = e.verdict === "NO MATCH" || e.verdict === "WRONG PART", flagged = reject || nomatch;
-  const ref = e.mode === "ref", cad = e.mode === "cad", esc = v => String(v).replace(/</g, "&lt;");
+  const ref = e.mode === "ref", cad = e.mode === "cad", types = e.mode === "types", esc = v => String(v).replace(/</g, "&lt;");
   const conf = reject ? e.pDefect : 1 - e.pDefect;
   const id = "PART-" + String(e.id).padStart(5, "0"), doc = "QC-" + e.time.slice(0, 10).replace(/-/g, "") + "-" + String(e.id).padStart(5, "0");
   const when = new Date(e.time), pct = v => (v * 100).toFixed(1) + "%";
@@ -813,8 +942,10 @@ function reportHtml(e) {
       : `The image does not resemble the enrolled “${e.profile}” parts. Check the part type, framing and lighting, then re-inspect.`)
     : "Release the part to the next operation. No defect evidence above the decision threshold.";
   const scoreTxt = cad ? (e.findings.length ? e.findings.map(f => esc(f.text)).join(" · ") : "outline and designed holes match the CAD") + (e.iou ? ` · outline match ${(e.iou * 100).toFixed(1)}%` : "")
-    : ref ? (reject && e.findings?.length ? `likely ${esc(e.findings[0].defect)} · ` : "") + `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}` : `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
+    : ref ? (reject && e.findings?.length ? `likely ${esc(e.findings[0].defect)} · ` : "") + `anomaly score ${e.score.toFixed(2)} vs threshold ${e.thr.toFixed(2)}`
+    : (types && reject ? `likely ${esc(e.defectType)} (${pct(e.typeShare)} of the defect probability) · ` : "") + `${pct(conf)} model confidence · p(defect) = ${e.pDefect.toFixed(4)}`;
   const typed = reject ? (e.findings || []).filter(f => f.defect) : [];
+  const fixes = (e.fixes || []).map(k => REMEDIES.find(x => x.key === k)).filter(Boolean).slice(0, 3);
   const where = f => f.cx == null ? "–" : (["Upper", "Middle", "Lower"][Math.min(2, Math.floor(f.cy * 3))] + "-" + ["left", "centre", "right"][Math.min(2, Math.floor(f.cx * 3))]).replace("Middle-centre", "Centre");
   const jetBar = "linear-gradient(90deg,#00007f,#0000ff,#00ffff,#7fff7f,#ffff00,#ff0000,#7f0000)";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -861,6 +992,13 @@ function reportHtml(e) {
   .types th { text-align:left; font-size:11px; font-weight:600; color:var(--sub); text-transform:uppercase; letter-spacing:.8px; padding:6px 10px 6px 0; border-bottom:1px solid var(--line); }
   .types td { padding-right:10px; } .types td:first-child { width:24px; }
   .action { border:1px solid var(--line); border-radius:8px; padding:14px 16px; display:flex; gap:12px; align-items:flex-start; }
+  #plan { break-before:page; page-break-before:always; padding:28px 32px 24px; }
+  #plan h2 { margin:0 0 4px; font-size:20px; } #plan > p { margin:0 0 18px; color:var(--sub); font-size:13px; }
+  .fx { border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-bottom:14px; break-inside:avoid; }
+  .fx h4 { margin:0 0 4px; font-size:15px; } .fx > p { margin:0 0 10px; color:var(--sub); font-size:12.5px; }
+  .fx .cols { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .fx h5 { margin:0 0 6px; font-size:10.5px; letter-spacing:1.2px; text-transform:uppercase; color:var(--accent); }
+  .fx ul { margin:0; padding-left:16px; font-size:12.5px; line-height:1.45; } .fx li + li { margin-top:3px; }
   .action .dot { flex:none; width:10px; height:10px; border-radius:50%; background:var(--accent); margin-top:5px; }
   .sign { display:grid; grid-template-columns:repeat(3,1fr); gap:24px; margin-top:8px; }
   .sign div { border-top:1px solid var(--ink); padding-top:6px; font-size:11px; color:var(--sub); margin-top:36px; }
@@ -897,7 +1035,7 @@ function reportHtml(e) {
     <div><small>${flagged ? "Evidence zone" : "Evidence"}</small><b>${flagged ? (cad && nomatch ? "Whole part" : e.zone) : "None"}</b>${flagged && !cad ? `<br><span style="color:var(--sub)">${pct(e.coverage)} of surface</span>` : ""}</div>
   </div>
 
-  ${typed.length ? `<h3>Defect type${ref ? " (likely)" : ""}</h3>
+  ${typed.length ? `<h3>Defect type${ref || types ? " (likely)" : ""}</h3>
   <table class="types"><tr><th>#</th><th>Type</th><th>${cad ? "Size and evidence" : "Evidence"}</th>${ref ? "<th>Where</th>" : ""}</tr>
     ${typed.map((f, i) => `<tr><td>${i + 1}</td><td><b>${esc(f.defect)}</b></td><td>${esc(cad ? f.text.slice(f.defect.length + 2) : f.why)}</td>${ref ? `<td>${where(f)}</td>` : ""}</tr>`).join("")}
   </table>` : ""}
@@ -908,12 +1046,12 @@ function reportHtml(e) {
       <figcaption><b>Captured image</b>Centre-cropped frame as seen by the model</figcaption></figure>
     <figure>${flagged || cad ? `<img src="${e.img}" alt="${cad ? "CAD overlay" : "Heatmap overlay"}">` : `<div class="none"><b>✓ Clean</b>No region exceeded the defect threshold, so no heatmap is drawn.</div>`}
       <figcaption>${cad ? `<b>CAD overlay</b>Red lines: CAD edges after aligning the photo to the CAD. Blue: designed through-holes. Filled red: findings.`
-        : `<b>${ref ? "Difference from good parts" : "Grad-CAM explanation"}</b>${flagged ? `${ref ? "Highlighted areas look unlike any enrolled good part" : "Highlighted areas drove the defect decision"}
+        : `<b>${ref ? "Difference from good parts" : types ? "Where the defect type was seen" : "Grad-CAM explanation"}</b>${flagged ? `${ref ? "Highlighted areas look unlike any enrolled good part" : "Highlighted areas drove the defect decision"}
         <div class="legend">Low<span></span>High ${ref ? "difference" : "influence"}</div>` : "Heatmap shown only for flagged parts"}`}</figcaption></figure>
   </div>
 
   <h3>Recommended action</h3>
-  <div class="action"><span class="dot"></span><div>${action}</div></div>
+  <div class="action"><span class="dot"></span><div>${action}${fixes.length ? " Likely causes and fixes are on the action plan page." : ""}</div></div>
 
   <h3>Inspection parameters</h3>
   <table>
@@ -925,6 +1063,10 @@ function reportHtml(e) {
     <tr><td>Method</td><td>Reference comparison against ${e.refCount} enrolled good part${e.refCount > 1 ? "s" : ""} of “${e.profile.replace(/</g, "&lt;")}”: ImageNet ResNet18 patch features, no defect training</td></tr>
     <tr><td>Explainability</td><td>Distance of each image patch to the most similar good-part patch (28×28 grid, upsampled)</td></tr>
     <tr><td>Defect type</td><td>Flagged areas compared with the best-matching enrolled good part after aligning rotation and position: metal missing or added at the outline, holes opened or filled, new dark lines or pits. A likely type, not a measurement; confirm by eye.</td></tr>`
+    : types ? `<tr><td>Decision rule</td><td>REJECT if p(defect) = 1 − p(good surface) &gt; ${THRESHOLD}; the type is the most likely defect class</td></tr>
+    <tr><td>Model</td><td>EfficientNet-B0 close-up classifier (gas porosity, shrinkage, crack, misrun, flash/burr, mould/sand defect, scratch, good), grayscale input, trained on real labelled close-ups of impeller castings; runs on-device</td></tr>
+    <tr><td>Explainability</td><td>Class activation map of the predicted type on the final convolutional layer</td></tr>
+    <tr><td>Limits</td><td>Trained on one product family (grayscale pump impellers). Treat the type as likely, not certain, and confirm by eye.</td></tr>`
     : `<tr><td>Decision rule</td><td>REJECT if p(defect) &gt; ${THRESHOLD}</td></tr>
     <tr><td>Model</td><td>MobileNetV2 binary classifier (ok / defect), runs on-device</td></tr>
     <tr><td>Explainability</td><td>Grad-CAM on the final convolutional layer (7×7 grid, upsampled)</td></tr>`}
@@ -935,6 +1077,13 @@ function reportHtml(e) {
   <div class="sign"><div>Inspector</div><div>QC supervisor</div><div>Date</div></div>
 </main>
 <footer><span>Generated by Cast Inspector · AI-assisted decision, verify critical rejects manually</span><span>${doc}</span></footer>
+${fixes.length ? `<section id="plan">
+  <h2>Action plan</h2><p>${doc} · ${id} · general foundry guidance for the defect type${fixes.length > 1 ? "s" : ""} found; adapt to your process sheet and customer spec</p>
+  ${fixes.map(m => `<div class="fx"><h4>${m.title}</h4><p>${m.confirm}</p><div class="cols">
+    <div><h5>Likely causes</h5><ul>${m.causes.map(t => `<li>${t}</li>`).join("")}</ul></div>
+    <div><h5>Fix the process</h5><ul>${m.fixes.map(t => `<li>${t}</li>`).join("")}</ul></div>
+    <div><h5>This part</h5><ul>${m.part.map(t => `<li>${t}</li>`).join("")}</ul></div></div></div>`).join("")}
+</section>` : ""}
 </body></html>`;
 }
 // PDF libs load on first report only (then the service worker caches them for offline use)
@@ -953,7 +1102,7 @@ function save(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 
-// Render the report in an off-screen iframe, rasterise it, and fit it onto one A4 page
+// Render the report in an off-screen iframe, rasterise it, and fit it onto one A4 page (action plan on a second page)
 async function downloadReport(e) {
   const t = new Date(e.time); t.setMinutes(t.getMinutes() - t.getTimezoneOffset());  // local time in the filename
   const name = `report_PART-${String(e.id).padStart(5, "0")}_${t.toISOString().slice(0, 19).replace(/[:T]/g, "-")}`;
@@ -970,13 +1119,24 @@ async function downloadReport(e) {
     const d = f.contentDocument;
     await Promise.all([...d.images].map(i => i.decode().catch(() => {})));
     await d.fonts?.ready;
-    const canvas = await html2canvas(d.body, { scale: 2, backgroundColor: "#ffffff", windowWidth: 820 });
+    const plan = d.getElementById("plan"), shot = () => html2canvas(d.body, { scale: 2, backgroundColor: "#ffffff", windowWidth: 820 });
+    if (plan) plan.style.display = "none";
+    const pages = [await shot()];
+    if (plan) {
+      const rest = [...d.body.children].filter(c => c !== plan);
+      rest.forEach(c => c.style.display = "none"); plan.style.display = "";
+      pages.push(await shot());
+    }
     f.remove();
-    const pdf = new jspdf.jsPDF({ unit: "mm", format: "a4" }), PW = 210, PH = 297, M = 8, r = canvas.height / canvas.width;
-    let w = PW - 2 * M, h = w * r;
-    if (h > PH - 2 * M) { h = PH - 2 * M; w = h / r; }
+    const pdf = new jspdf.jsPDF({ unit: "mm", format: "a4" }), PW = 210, PH = 297, M = 8;
     pdf.setProperties({ title: `Casting inspection report ${name}` });
-    pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", (PW - w) / 2, M, w, h);
+    pages.forEach((canvas, i) => {
+      const r = canvas.height / canvas.width;
+      let w = PW - 2 * M, h = w * r;
+      if (h > PH - 2 * M) { h = PH - 2 * M; w = h / r; }
+      if (i) pdf.addPage();
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", (PW - w) / 2, M, w, h);
+    });
     save(pdf.output("blob"), name + ".pdf");
   } catch (err) {
     console.error(err);
@@ -1002,8 +1162,8 @@ $("file").onchange = e => {
 $("export").onclick = () => {
   const q = s => `"${String(s ?? "").replace(/"/g, '""')}"`;
   const csv = "time,part_type,verdict,p_defect,anomaly_score,threshold,defect_type,findings\n" + log.map(e =>
-    [e.time, q(e.mode === "ref" ? e.profile : e.mode === "cad" ? e.part + " (CAD)" : "Pump impeller (pre-trained)"), e.verdict,
-     e.mode === "model" ? e.pDefect.toFixed(4) : "", e.score?.toFixed(4) ?? "", e.thr?.toFixed(4) ?? "",
+    [e.time, q(e.mode === "ref" ? e.profile : e.mode === "cad" ? e.part + " (CAD)" : e.mode === "types" ? "Close-up (defect-type classifier)" : "Pump impeller (pre-trained)"), e.verdict,
+     e.mode === "model" || e.mode === "types" ? e.pDefect.toFixed(4) : "", e.score?.toFixed(4) ?? "", e.thr?.toFixed(4) ?? "",
      q([...new Set((e.findings || []).filter(f => f.defect).map(f => f.defect))].join("; ")),
      q((e.findings || []).map(f => f.text).join("; "))].join(",")).join("\n");
   const a = document.createElement("a");
