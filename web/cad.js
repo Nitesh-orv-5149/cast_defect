@@ -550,9 +550,9 @@ function decide(st, cfg) {
   const S = st.size, mask = new Uint8Array(S * S), F = [];
   // A deep or off-axis hole may show almost no background from this camera position; it can't be checked for "blocked"
   const checkable = st.holes.filter(hh => hh.areaMm2 >= cfg.seeThroughMin * (hh.mouthMm2 || hh.areaMm2));
-  const blocked = checkable.filter(hh => hh.open < cfg.holeOpenMin), unchecked = st.holes.length - checkable.length;
+  const blocked = checkable.filter(hh => hh.open < Math.min(0.85, cfg.holeOpenMin / (cfg.sens || 1))), unchecked = st.holes.length - checkable.length;
   const holeArea = st.holes.reduce((s, hh) => s + hh.areaMm2, 0) || 1;
-  const extra = st.extra.items.filter(c => c.areaMm2 >= cfg.extraHoleMm2);
+  const extra = st.extra.items.filter(c => c.areaMm2 >= (cfg.sens || 1) * cfg.extraHoleMm2);
   const extraArea = extra.reduce((s, c) => s + c.areaMm2, 0);
   const patternOff = blocked.length >= Math.max(2, Math.ceil(cfg.patternMismatch * checkable.length)) || extraArea > cfg.patternMismatch * holeArea;
   if (st.iou < cfg.iouMin || st.featureRatio < cfg.featureRatioMin || patternOff) {
@@ -586,7 +586,8 @@ function decide(st, cfg) {
     }
   }
   // outline tolerance scales down for small parts (0.2% of the part's area, 2 mm² at least, never above outlineMm2)
-  const outlineMin = Math.min(cfg.outlineMm2, Math.max(1.5, 0.0015 * (st.partMm2 || Infinity)));
+  // the slider (sens) scales every size limit: below 1 flags smaller defects, above 1 only bigger ones
+  const sens = cfg.sens || 1, outlineMin = sens * Math.min(cfg.outlineMm2, Math.max(1.5, 0.0015 * (st.partMm2 || Infinity)));
   const miss = st.missing.items.filter(c => c.areaMm2 >= outlineMin), exc = st.excess.items.filter(c => c.areaMm2 >= outlineMin);
   const miSh = miss.length ? shapes(st.missing.lab, S) : {}, xsSh = exc.length ? shapes(st.excess.lab, S) : {};
   // a sliver under 1 mm wide along the outline is a ragged or rusty edge, not a chip

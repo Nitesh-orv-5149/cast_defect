@@ -86,7 +86,8 @@
   input[type=checkbox], input[type=range] { accent-color:var(--maroon-2); }
   .chk { font-size:13px; display:flex; gap:8px; align-items:center; color:var(--muted); }
   #thumbs { display:flex; flex-wrap:wrap; gap:6px; } #thumbs img { width:52px; height:52px; border-radius:12px; object-fit:cover; border:1px solid var(--stroke); }
-  #sens { display:flex; gap:10px; align-items:center; font-size:12px; color:var(--muted); } #sens input { flex:1; }
+  .sens { display:flex; gap:10px; align-items:center; font-size:12px; color:var(--muted); margin-top:8px; } .sens input { flex:1; }
+  .sens { flex-wrap:wrap; row-gap:4px; } .sens output { order:-1; flex-basis:100%; font-variant-numeric:tabular-nums; } .panel p.sl { font-size:12px; color:var(--muted); margin:4px 0 0; }
   .row { display:flex; gap:10px; flex-wrap:wrap; } .row > * { flex:1 1 140px; white-space:nowrap; }
   #cadparts { display:flex; flex-wrap:wrap; gap:8px; }
   #cadnew, #cadform { display:grid; gap:10px; }
@@ -217,18 +218,19 @@
 </nav>
 <main>
   <header class="brand">
-    <div><h1>Cast <b>Inspector</b></h1><p id="sub">Pre-trained pump impeller classifier · Grad-CAM explanations</p></div>
+    <div><h1>Cast <b>Inspector</b></h1><p id="sub">Close-up defect-type classifier · fill the frame with the defect</p></div>
     <span id="status" class="tag">Loading</span>
   </header>
 
   <section id="modelpanel" class="panel glass">
-    <div class="phead"><h2>What are you photographing?</h2></div>
-    <div id="mmode"><button class="chip glass on" data-m="closeup">Close-up of a defect<small>names the type</small></button><button class="chip glass" data-m="whole">Whole impeller<small>defect / OK</small></button></div>
+    <div class="phead"><h2>Close-up defect classifier</h2></div>
+    <p class="sl">Photograph one defect close up so it fills the frame; the app names its type.</p>
+    <div class="sens">Stricter<input id="t1r" type="range" min="0.2" max="0.8" step="0.05" value="0.5" aria-label="Reject threshold">Looser<output id="t1v"></output></div>
   </section>
   <section id="refpanel" class="panel glass" hidden>
     <div class="phead"><h2>Part types</h2><button id="delprof" class="glass" hidden>Delete</button></div>
     <div id="parts"></div>
-    <div id="sens" hidden>Stricter<input id="sensr" type="range" min="0.6" max="1.4" step="0.05" value="1" aria-label="Sensitivity">Looser</div>
+    <div id="sens" class="sens" hidden>Stricter<input id="sensr" type="range" min="0.6" max="1.4" step="0.05" value="1" aria-label="Threshold">Looser<output id="sensv"></output></div>
     <section id="enrol" hidden>
       <h2>New part type: show good parts</h2>
       <p>Photograph 1–20 defect-free parts with the same distance, lighting and background you will inspect with. More photos = more reliable.</p>
@@ -247,9 +249,10 @@
   <section id="cadpanel" class="panel glass" hidden>
     <div class="phead"><h2>CAD parts</h2><button id="caddel" class="glass" hidden>Delete</button></div>
     <div id="cadparts"></div>
+    <div id="cadsens" class="sens" hidden>Stricter<input id="cadr" type="range" min="0.25" max="4" step="0.25" value="1" aria-label="Defect size threshold">Looser<output id="cadv"></output></div>
     <section id="cadnew" hidden>
       <h2>New part from a CAD file</h2>
-      <p>STL or OBJ in millimetres. At inspection, put the part on a plain coloured mat (green or blue) with the whole part in view.</p>
+      <p>STL or OBJ in millimetres. At inspection, put the part on a plain background that contrasts with it (coloured mat, or white paper for dark parts), photograph it straight from above with the whole part in view.</p>
       <label class="glass">Choose CAD file (.stl, .obj)<input id="cadfile" type="file" accept=".stl,.obj,model/stl" hidden></label>
       <div id="cadform" hidden>
         <p id="cadinfo"></p>
@@ -276,7 +279,7 @@
     </figure>
     <figure class="cam result">
       <canvas id="view" class="view" width="448" height="448"></canvas>
-      <div class="hud"><span class="tag" id="viewcap">Grad-CAM</span><span class="tag end" id="viewtag" hidden></span></div>
+      <div class="hud"><span class="tag" id="viewcap">Type heat map</span><span class="tag end" id="viewtag" hidden></span></div>
       <div id="viewempty" class="empty"><svg viewBox="0 0 24 24"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M4 12h16"/></svg>
         <b>No inspection yet</b>Press INSPECT or Space</div>
       <div id="legend" class="tag legend" hidden>Low<span></span>High</div>
@@ -298,16 +301,18 @@
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js" crossorigin="anonymous"></script>
 <script src="remedies.js"></script>
 <script>
-const THRESHOLD = 0.5;  // defect probability above this = REJECT. Tune on the shop floor.
+// Tab 1: reject when p(defect) is above this (slider, saved on the phone). Tab 3: defect size limits are scaled by CAD_SENS.
+let THRESHOLD = 0.5, CAD_SENS = 1;
+try { THRESHOLD = +localStorage.getItem("t1thr") || 0.5; CAD_SENS = +localStorage.getItem("cadsens") || 1; } catch (e) {}
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
 
 const $ = id => document.getElementById(id);
 const video = $("video"), view = $("view"), verdict = $("verdict"), btn = $("inspect");
 const log = [];
-let session, meta, nextId = 1;
-// Tab 1 has two models: the close-up defect-type classifier (types.onnx) and the whole-impeller defect/OK model
-let mmode = "closeup", typesSession, typesMeta;
-try { mmode = localStorage.getItem("mmode") || "closeup"; } catch (e) {}
+// meta: input settings of the reference-images backbone (ImageNet ResNet18, colour, 224 px)
+let session, meta = { size: 224, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225] }, nextId = 1;
+// Tab 1: the close-up defect-type classifier (types.onnx)
+let typesSession, typesMeta;
 const TYPE_NAMES = { gas: "gas porosity / blowhole", shrinkage: "shrinkage cavity", crack: "crack", misrun: "misrun / cold shut",
   flash_burr: "flash / burr", mould_surface: "mould or sand defect (scar, inclusion)", scratch: "scratch or handling mark", good: "good surface" };
 const loadTypes = () => typesSession ? Promise.resolve() : Promise.all([fetch("types.json").then(r => r.json()),
@@ -318,9 +323,9 @@ const jet = v => [1.5 - Math.abs(4 * v - 3), 1.5 - Math.abs(4 * v - 2), 1.5 - Ma
   .map(c => Math.round(255 * Math.min(1, Math.max(0, c))));
 
 async function init() {
-  // One retry: on first visit the page and the offline cache download model.onnx at the same time, which can fail once
-  const load = () => Promise.all([fetch("meta.json").then(r => r.json()), ort.InferenceSession.create("model.onnx", { executionProviders: ["wasm"] })]);
-  [meta, session] = await load().catch(() => new Promise(r => setTimeout(r, 1500)).then(load));
+  // One retry: on first visit the page and the offline cache download the model at the same time, which can fail once
+  await loadTypes().catch(() => new Promise(r => setTimeout(r, 1500)).then(loadTypes));
+  session = typesSession;
   await loadProfiles();
   await loadCadParts();
   $("status").textContent = "On-device";
@@ -396,7 +401,7 @@ function framePart(src, w, h, n) {
   g.drawImage(src, cx - side / 2, cy - side / 2, side, side, 0, 0, n, n);  // the parts of the square outside the photo stay background
   return c;
 }
-// Tabs 2 and 3 compare whole parts, so they frame the part; the close-up and whole-impeller models keep the centre crop
+// Tabs 2 and 3 compare whole parts, so they frame the part; the close-up classifier keeps the centre crop
 const grab = (src, w, h) => (tab === "ref" || tab === "cad") ? framePart(src, w, h, view.width) : crop(src, w, h, view.width);
 
 // Canvas -> normalised CHW float tensor data at the model's input size
@@ -410,26 +415,12 @@ function toTensor(c, m = meta) {
   return new ort.Tensor("float32", x, [1, 3, n, n]);
 }
 
-// Pre-trained impeller model: classifier + Grad-CAM
-async function inspectModel(raw) {
-  const out = await session.run({ input: toTensor(raw) });
-  const pDefect = out.probs.data[meta.defect_idx];
-  const [, K, H, W] = out.features.dims, f = out.features.data, wts = meta.cam_weights;
-  // Grad-CAM: for a GAP+Linear head the gradient is the fc weight, so CAM = ReLU(sum_k w_k * A_k)
-  const map = new Float32Array(H * W);
-  for (let k = 0; k < K; k++) for (let j = 0; j < H * W; j++) map[j] += wts[k] * f[k * H * W + j];
-  let max = 0;
-  for (let j = 0; j < map.length; j++) { map[j] = Math.max(0, map[j]); max = Math.max(max, map[j]); }
-  const reject = pDefect > THRESHOLD, conf = reject ? pDefect : 1 - pDefect;
-  return { mode: "model", verdict: reject ? "REJECT" : "PASS", pDefect, map, H, W, lo: 0, hi: max,
-    detail: `${(conf * 100).toFixed(1)}% confidence` + (reject ? " · heat = regions that drove the defect call" : " · no defect evidence above threshold") };
-}
 
 // Close-up classifier: which defect type fills the frame, with a class activation map for that type
 // Close-up defects smaller than the frame: the model was trained on crops the defect fills, so a photo that passes as a
 // whole is also checked as 9 overlapping half-size tiles (3 × 3, quarter-frame steps). It is rejected when at least two
-// tiles are confident (> 0.7); on held-out test crops this flags no more good surfaces than the whole frame alone.
-const TILE_P = 0.7, TILE_K = 2;
+// tiles are confident (> 0.7 at the default threshold; the tile limit moves with the slider); on held-out test crops this flags no more good surfaces than the whole frame alone.
+const TILE_K = 2, tileP = () => Math.min(0.95, Math.max(0.4, 0.7 + THRESHOLD - 0.5));
 async function inspectTypes(raw) {
   await loadTypes();
   const out = await typesSession.run({ input: toTensor(raw, typesMeta) }), C = typesMeta.classes, gi = C.indexOf("good");
@@ -442,7 +433,7 @@ async function inspectTypes(raw) {
       const q = (await typesSession.run({ input: toTensor(c, typesMeta) })).probs.data;
       tiles.push({ i, j, q, d: 1 - q[gi] });
     }
-    const hot = tiles.filter(x => x.d > TILE_P);
+    const hot = tiles.filter(x => x.d > tileP());
     if (hot.length >= TILE_K) {
       tiled = hot;
       P = C.map((_, c) => hot.reduce((s, x) => s + x.q[c], 0) / hot.length);  // type from the confident tiles
@@ -468,7 +459,7 @@ async function inspectTypes(raw) {
   const detail = reject ? `Likely ${name} · ${pct(share)} sure of the type${share < 0.55 ? `, could also be ${TYPE_NAMES[second[0]]}` : ""} · p(defect) ${pct(pDefect)}`
     : `Looks like a good surface · p(defect) ${pct(pDefect)}`;
   const where = tiled ? ` · small defect found by zooming in (${tiled.length} of 9 tiles)` : "";
-  return { mode: "types", verdict: reject ? "REJECT" : "PASS", pDefect, defectType: reject ? name : null, typeShare: share, probs: Object.fromEntries(C.map((c, i) => [c, P[i]])),
+  return { mode: "types", verdict: reject ? "REJECT" : "PASS", pDefect, thr: THRESHOLD, defectType: reject ? name : null, typeShare: share, probs: Object.fromEntries(C.map((c, i) => [c, P[i]])),
     findings, map, H, W, lo: 0, hi: max, detail: detail + where + (reject ? " · heat = where that type was seen" : "") };
 }
 
@@ -477,7 +468,7 @@ async function inspect(src, w, h) {
   const raw = grab(src, w, h);
   verdict.className = ""; verdict.textContent = "Inspecting…"; $("fix").hidden = true;
   $("stage").classList.add("busy");
-  const r = await (tab === "cad" ? inspectCad(raw) : active ? inspectRef(raw, active) : mmode === "closeup" ? inspectTypes(raw) : inspectModel(raw))
+  const r = await (tab === "cad" ? inspectCad(raw) : active ? inspectRef(raw, active) : inspectTypes(raw))
     .finally(() => $("stage").classList.remove("busy"));
   const { map, H, W, lo, hi } = r, flagged = r.verdict !== "PASS";
   const t = v => Math.min(1, Math.max(0, (v - lo) / (hi - lo || 1)));
@@ -631,7 +622,7 @@ $("caddel").onclick = async () => {
 };
 async function inspectCad(raw) {
   const S = raw.width, px = raw.getContext("2d").getImageData(0, 0, S, S).data, part = cadProf.name;
-  const d = await cadCall({ cmd: "inspect", name: part, rgba: px, w: S, h: S }, null, [px.buffer]);
+  const d = await cadCall({ cmd: "inspect", name: part, rgba: px, w: S, h: S, cfg: { sens: CAD_SENS } }, null, [px.buffer]);
   if (d.noPart) return { mode: "cad", part, verdict: "NO MATCH", findings: [], pDefect: 1,
     detail: "No part found: use a plain background that contrasts with the part (coloured mat, or white paper for dark parts) and keep the whole part in view" };
   if (d.tilted) return { mode: "cad", part, verdict: "NO MATCH", findings: [], pDefect: 1,
@@ -795,7 +786,7 @@ function addGood(c) { if (enrolImgs.length < MAX_REF) enrolImgs.push(c); renderE
 // Navbar tab: "model" (pre-trained), "ref" (reference images), "cad" (reference CAD, not built yet).
 // In "ref", sel is the chosen part type name or "__new" while enrolling.
 let tab = "model", sel = "";
-const SUBS = { model: "Pre-trained pump impeller classifier · Grad-CAM explanations",
+const SUBS = { model: "Close-up defect-type classifier · fill the frame with the defect",
   ref: "Compare against your own good parts · no training needed", cad: "Compare against the CAD model: outline, designed holes, wrong parts" };
 async function loadProfiles(select) {
   try { profiles = await store("readonly", s => s.getAll()); } catch (e) { profiles = []; }
@@ -808,34 +799,30 @@ function renderParts() {
     `${p.name.replace(/</g, "&lt;")}<small>${p.count} refs</small></button>`).join("") +
     `<button class="chip glass${sel === "__new" ? " on" : ""}" data-name="__new">+ New part</button>`;
 }
-$("mmode").onclick = e => {
-  const b = e.target.closest("[data-m]");
-  if (!b || b.dataset.m === mmode) return;
-  mmode = b.dataset.m;
-  try { localStorage.setItem("mmode", mmode); } catch (err) {}
-  if (mmode === "closeup") loadTypes().catch(console.error);
-  setMode();
-};
+const pctOut = v => `Threshold: reject when p(defect) is above ${Math.round(v * 100)}%`, sizeOut = v => `Threshold: defect size limits × ${(+v).toFixed(2)}`;
+$("t1r").value = THRESHOLD; $("t1v").textContent = pctOut(THRESHOLD);
+$("t1r").oninput = () => { THRESHOLD = +$("t1r").value; $("t1v").textContent = pctOut(THRESHOLD); try { localStorage.setItem("t1thr", THRESHOLD); } catch (e) {} };
+$("cadr").value = CAD_SENS; $("cadv").textContent = sizeOut(CAD_SENS);
+$("cadr").oninput = () => { CAD_SENS = +$("cadr").value; $("cadv").textContent = sizeOut(CAD_SENS); try { localStorage.setItem("cadsens", CAD_SENS); } catch (e) {} };
 function setMode() {
   $("fix").hidden = true;
   const ref = tab === "ref", enrolling = ref && sel === "__new";
   $("refpanel").hidden = !ref; $("cadpanel").hidden = tab !== "cad"; $("enrol").hidden = !enrolling; $("modelpanel").hidden = tab !== "model";
-  $("mmode").querySelectorAll(".chip").forEach(b => b.classList.toggle("on", b.dataset.m === mmode));
   active = ref && !enrolling ? profiles.find(p => p.name === sel) ?? null : null;
   $("delprof").hidden = $("sens").hidden = !active;
-  if (active) $("sensr").value = active.sens;
+  if (active) { $("sensr").value = active.sens; $("sensv").textContent = `Threshold: anomaly score limit × ${(+active.sens).toFixed(2)}`; }
   const cad = tab === "cad", cadNewPart = cad && cadSel === "__new", cadReady = cad && cadProf?.name === cadSel;
-  $("cadnew").hidden = !cadNewPart; $("caddel").hidden = !cad || cadNewPart || !cadSel;
+  $("cadnew").hidden = !cadNewPart; $("caddel").hidden = !cad || cadNewPart || !cadSel; $("cadsens").hidden = !cad || cadNewPart || !cadSel;
   if (cad && !cadNewPart && !cadReady) ensureCadProfile();
-  $("viewcap").textContent = cad ? "CAD overlay" : active ? "Difference map" : mmode === "closeup" ? "Type heat map" : "Grad-CAM";
-  $("hint").textContent = tab === "model" && mmode === "closeup" ? "Fill the frame with the defect" : "Fit the part inside the frame";
-  $("sub").textContent = tab === "model" && mmode === "closeup" ? "Close-up defect-type classifier · fill the frame with the defect" : SUBS[tab];
+  $("viewcap").textContent = cad ? "CAD overlay" : active ? "Difference map" : "Type heat map";
+  $("hint").textContent = tab === "model" ? "Fill the frame with the defect" : "Fit the part inside the frame";
+  $("sub").textContent = tab === "model" ? "Close-up defect-type classifier · fill the frame with the defect" : SUBS[tab];
   btn.disabled = enrolling || !session || (cad && !cadReady);
   verdict.className = "";
   if (enrolling) { renderEnrol(); verdict.textContent = "Show good parts to create the reference"; }
   else if (cadNewPart) verdict.textContent = "Choose a CAD file to create the reference";
   else if (cad) verdict.textContent = cadReady ? `Ready: inspecting “${cadSel}” against its CAD` : `Preparing “${cadSel}” from its CAD…`;
-  else if (session) verdict.textContent = active ? `Ready: inspecting “${active.name}”` : tab === "model" && mmode === "closeup" ? "Ready: fill the frame with the defect, about 2–5 cm away" : "Ready: place part under camera";
+  else if (session) verdict.textContent = active ? `Ready: inspecting “${active.name}”` : tab === "model" ? "Ready: fill the frame with the defect, about 2–5 cm away" : "Ready: place part under camera";
 }
 const TABS = ["model", "ref", "cad"], navBtns = [...$("nav").querySelectorAll(":scope > [data-tab]")];
 const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -937,6 +924,7 @@ $("finish").onclick = async () => {
     await loadProfiles(name);
   } catch (err) { console.error(err); verdict.textContent = "Could not save reference: " + err.message; $("finish").disabled = false; }
 };
+$("sensr").oninput = () => { if (active) $("sensv").textContent = `Threshold: anomaly score limit × ${(+$("sensr").value).toFixed(2)}`; };
 $("sensr").onchange = async () => { if (!active) return; active.sens = +$("sensr").value; await store("readwrite", s => s.put(active)); setMode(); };
 $("delprof").onclick = async () => {
   if (!active || !confirm(`Delete the reference for “${active.name}”?`)) return;
