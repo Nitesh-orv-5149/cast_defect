@@ -467,8 +467,10 @@ function measure(prof, rgba, w, h) {
   const nearOutline = dilate(rd.outline, S, S, 7), interior = and(te, not(nearOutline), not(dilate(th, S, S, 7)));
   const far = not(dilate(te, S, S, 9)), body = erode(and(tm, not(th)), S, S, 9);
   const on = quantile(pick(P, interior), 0.5), off = quantile(pick(Gd, and(body, far)), 0.5) * 2 / Math.PI;
+  // outline match leaves out the designed holes: a filled hole is judged by the hole checks (blocked), not as a
+  // different part
   let inter = 0, uni = 0;
-  for (let p = 0; p < N; p++) { inter += pm[p] && tm[p]; uni += pm[p] || tm[p]; }
+  for (let p = 0; p < N; p++) if (!th[p]) { inter += pm[p] && tm[p]; uni += pm[p] || tm[p]; }
   const st = { iou: inter / Math.max(uni, 1), featureRatio: on / Math.max(off, 1e-6), view: al.view, tilt: prof.views[al.view].tilt, W: al.W, size: S, ppm,
     partMm2: count(tm) * mm2 };
   const tol = Math.max(1, Math.round(ppm)), kt = 2 * tol + 1, ml = rd.mouth, mouth = ml.map(v => v ? 1 : 0);
@@ -584,7 +586,7 @@ function decide(st, cfg) {
     }
   }
   // outline tolerance scales down for small parts (0.2% of the part's area, 2 mm² at least, never above outlineMm2)
-  const outlineMin = Math.min(cfg.outlineMm2, Math.max(2, 0.002 * (st.partMm2 || Infinity)));
+  const outlineMin = Math.min(cfg.outlineMm2, Math.max(1.5, 0.0015 * (st.partMm2 || Infinity)));
   const miss = st.missing.items.filter(c => c.areaMm2 >= outlineMin), exc = st.excess.items.filter(c => c.areaMm2 >= outlineMin);
   const miSh = miss.length ? shapes(st.missing.lab, S) : {}, xsSh = exc.length ? shapes(st.excess.lab, S) : {};
   // a sliver under 1 mm wide along the outline is a ragged or rusty edge, not a chip
@@ -625,7 +627,7 @@ function partMask(rgba, w, h, loose = false) {
     for (let p = 0; p < N; p++) u8[p] = Math.round(255 * Math.min(1, Math.max(D[p] / dq, (Tb[p] - tb) / tq)));
     const t = otsu(u8);
     let m = close(open(u8.map(v => v > t ? 1 : 0), w, h, 5), w, h, 5);  // the opening drops ruled lines and paper texture
-    const K = Math.max(9, Math.round(Math.min(w, h) / 40) | 1);
+    const K = Math.max(7, Math.round(Math.min(w, h) / 64) | 1);
     m = and(m, dilate(open(m, w, h, K), w, h, K));                       // and trims ruled lines still stuck to the part
     const cc = components(m, w, h, true);
     if (cc.n < 1) return null;
@@ -634,7 +636,7 @@ function partMask(rgba, w, h, loose = false) {
     M = cc.lab.map(l => l === k ? 1 : 0);
     const hc = components(enclosedBackground(M, w, h), w, h, false);
     const nPart = count(M);
-    for (let p = 0; p < N; p++) if (hc.lab[p] && hc.area[hc.lab[p]] < Math.max(12, 0.01 * nPart)) M[p] = 1;
+    for (let p = 0; p < N; p++) if (hc.lab[p] && hc.area[hc.lab[p]] < Math.max(12, 0.002 * nPart)) M[p] = 1;
   }
   let n = count(M), edge = 0;
   for (let x = 0; x < w; x++) edge += M[x] + M[(h - 1) * w + x];

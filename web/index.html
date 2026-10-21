@@ -426,24 +426,50 @@ async function inspectModel(raw) {
 }
 
 // Close-up classifier: which defect type fills the frame, with a class activation map for that type
+// Close-up defects smaller than the frame: the model was trained on crops the defect fills, so a photo that passes as a
+// whole is also checked as 9 overlapping half-size tiles (3 × 3, quarter-frame steps). It is rejected when at least two
+// tiles are confident (> 0.7); on held-out test crops this flags no more good surfaces than the whole frame alone.
+const TILE_P = 0.7, TILE_K = 2;
 async function inspectTypes(raw) {
   await loadTypes();
-  const out = await typesSession.run({ input: toTensor(raw, typesMeta) }), P = out.probs.data, C = typesMeta.classes;
-  const gi = C.indexOf("good"), pDefect = 1 - P[gi];
+  const out = await typesSession.run({ input: toTensor(raw, typesMeta) }), C = typesMeta.classes, gi = C.indexOf("good");
+  let P = out.probs.data, pDefect = 1 - P[gi], tiled = null;
+  if (pDefect <= THRESHOLD) {
+    const S = raw.width, t = S / 2, tiles = [];
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+      const c = document.createElement("canvas"); c.width = c.height = typesMeta.size;
+      c.getContext("2d").drawImage(raw, j * S / 4, i * S / 4, t, t, 0, 0, c.width, c.height);
+      const q = (await typesSession.run({ input: toTensor(c, typesMeta) })).probs.data;
+      tiles.push({ i, j, q, d: 1 - q[gi] });
+    }
+    const hot = tiles.filter(x => x.d > TILE_P);
+    if (hot.length >= TILE_K) {
+      tiled = hot;
+      P = C.map((_, c) => hot.reduce((s, x) => s + x.q[c], 0) / hot.length);  // type from the confident tiles
+      pDefect = Math.max(...hot.map(x => x.d));
+    }
+  }
   const ranked = C.map((c, i) => [c, P[i]]).filter(([c]) => c !== "good").sort((a, b) => b[1] - a[1]);
   const reject = pDefect > THRESHOLD, [top, pt] = ranked[0], k = C.indexOf(top);
-  const [, K, H, W] = out.features.dims, f = out.features.data, wts = typesMeta.cam_weights[k], map = new Float32Array(H * W);
-  for (let c = 0; c < K; c++) for (let j = 0; j < H * W; j++) map[j] += wts[c] * f[c * H * W + j];
-  let max = 0, peak = 0;
+  let H, W, map, max = 0, peak = 0;
+  if (tiled) {  // heat map: each confident tile lights the 2 × 2 cells of a 4 × 4 grid it covers
+    H = W = 4; map = new Float32Array(16);
+    for (const x of tiled) for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) map[(x.i + a) * 4 + x.j + b] += x.d;
+  } else {
+    const [, K, h, w] = out.features.dims, f = out.features.data, wts = typesMeta.cam_weights[k];
+    H = h; W = w; map = new Float32Array(H * W);
+    for (let c = 0; c < K; c++) for (let j = 0; j < H * W; j++) map[j] += wts[c] * f[c * H * W + j];
+  }
   for (let j = 0; j < map.length; j++) { map[j] = Math.max(0, map[j]); if (map[j] > max) { max = map[j]; peak = j; } }
-  const pct = v => (v * 100).toFixed(0) + "%", share = pt / pDefect;  // how clearly the top type wins among defect types
+  const pct = v => (v * 100).toFixed(0) + "%", share = Math.min(1, pt / (1 - P[gi]));  // how clearly the top type wins among defect types
   const name = TYPE_NAMES[top] || top, second = ranked[1];
   const findings = reject ? [{ type: "closeup", defect: name, why: `${pct(share)} of the defect probability${share < 0.55 ? `; could also be ${TYPE_NAMES[second[0]]}` : ""}`,
     text: `likely ${name} (${pct(share)})`, cx: ((peak % W) + 0.5) / W, cy: ((peak / W | 0) + 0.5) / H }] : [];
   const detail = reject ? `Likely ${name} · ${pct(share)} sure of the type${share < 0.55 ? `, could also be ${TYPE_NAMES[second[0]]}` : ""} · p(defect) ${pct(pDefect)}`
     : `Looks like a good surface · p(defect) ${pct(pDefect)}`;
+  const where = tiled ? ` · small defect found by zooming in (${tiled.length} of 9 tiles)` : "";
   return { mode: "types", verdict: reject ? "REJECT" : "PASS", pDefect, defectType: reject ? name : null, typeShare: share, probs: Object.fromEntries(C.map((c, i) => [c, P[i]])),
-    findings, map, H, W, lo: 0, hi: max, detail: detail + (reject ? " · heat = where that type was seen" : "") };
+    findings, map, H, W, lo: 0, hi: max, detail: detail + where + (reject ? " · heat = where that type was seen" : "") };
 }
 
 async function inspect(src, w, h) {
